@@ -13,6 +13,26 @@ struct ScreenshotEditorView: View {
     @State private var showNewTemplate = false
     @State private var showUploadSheet = false
     @State private var uploadPNGData: Data?
+    @State private var viewMode: ScreenshotsViewMode = .editor
+
+    private enum ScreenshotsViewMode: String, CaseIterable {
+        case editor
+        case gallery
+
+        var label: String {
+            switch self {
+            case .editor: return "Edit"
+            case .gallery: return "Gallery"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .editor: return "slider.horizontal.3"
+            case .gallery: return "rectangle.stack"
+            }
+        }
+    }
 
     var templates: [ScreenshotTemplate] {
         app.screenshotTemplates.sorted { $0.createdAt < $1.createdAt }
@@ -21,31 +41,35 @@ struct ScreenshotEditorView: View {
     var body: some View {
         HSplitView {
             templateListPanel
-                .frame(minWidth: 180, idealWidth: 200, maxWidth: 240)
+                .frame(minWidth: 200, idealWidth: 220, maxWidth: 280)
 
-            if let template = selectedTemplate {
-                TemplateEditorView(template: template)
-            } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "photo.stack")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 48)
-                    Text("No Template")
-                        .font(.headline)
-                    Text("Create a screenshot template to design your App Store screenshots.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                    Button("New Template") { showNewTemplate = true }
-                        .buttonStyle(.borderedProminent)
-                        .padding(.top, 4)
+            switch viewMode {
+            case .editor:
+                if let template = selectedTemplate {
+                    TemplateEditorView(template: template)
+                } else {
+                    emptyEditorState
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .padding(.horizontal, 32)
+            case .gallery:
+                ScreenshotGalleryView(
+                    templates: templates,
+                    selectedTemplate: $selectedTemplate
+                ) {
+                    viewMode = .editor
+                }
             }
         }
         .toolbar {
+            ToolbarItem {
+                Picker("View", selection: $viewMode) {
+                    ForEach(ScreenshotsViewMode.allCases, id: \.self) { mode in
+                        Label(mode.label, systemImage: mode.icon).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("Switch between editor and App Store gallery preview")
+            }
+
             ToolbarItem {
                 Button { showNewTemplate = true } label: {
                     Label("New Template", systemImage: "plus")
@@ -53,7 +77,7 @@ struct ScreenshotEditorView: View {
                 .help("New screenshot template")
             }
 
-            if let template = selectedTemplate {
+            if viewMode == .editor, let template = selectedTemplate {
                 ToolbarItem {
                     Button { exportTemplate(template) } label: {
                         Label("Export PNG", systemImage: "square.and.arrow.up")
@@ -84,6 +108,7 @@ struct ScreenshotEditorView: View {
         .sheet(isPresented: $showNewTemplate) {
             NewTemplateSheet(app: app) { template in
                 selectedTemplate = template
+                viewMode = .editor
             }
         }
         .sheet(isPresented: $showUploadSheet) {
@@ -93,26 +118,88 @@ struct ScreenshotEditorView: View {
         }
     }
 
-    private var templateListPanel: some View {
-        VStack(spacing: 0) {
-            Text("Templates")
+    private var emptyEditorState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 32))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 48)
+            Text("No Template")
                 .font(.headline)
+            Text("Create a screenshot template to design your App Store screenshots.")
+                .font(.callout)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .multilineTextAlignment(.center)
+            Button("New Template") { showNewTemplate = true }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, 32)
+    }
 
-            Divider()
-
-            List(templates, selection: $selectedTemplate) { template in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(template.name).fontWeight(.medium)
-                    Text(template.deviceType.rawValue).font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 2)
-                .tag(template)
+    private var templateListPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Templates")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("\(templates.count)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                Spacer(minLength: 0)
             }
-            .listStyle(.sidebar)
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
+            if templates.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo.stack")
+                        .font(.title2)
+                        .foregroundStyle(.quaternary)
+                    Text("No templates yet")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text("Create one to get started")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(templates.enumerated()), id: \.element.id) { index, template in
+                            TemplateSidebarRow(
+                                template: template,
+                                isSelected: selectedTemplate == template,
+                                isLast: index == templates.count - 1
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture(count: 2) {
+                                selectedTemplate = template
+                                viewMode = .editor
+                            }
+                            .onTapGesture {
+                                selectedTemplate = template
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 12)
+                }
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
+        .onAppear {
+            if selectedTemplate == nil {
+                selectedTemplate = templates.first
+            }
         }
     }
 
@@ -133,6 +220,7 @@ struct ScreenshotEditorView: View {
         }
     }
 
+    @MainActor
     private func renderTemplate(_ template: ScreenshotTemplate) -> Data? {
         let size = template.deviceType.canvasSize
         let rep = NSBitmapImageRep(
@@ -152,9 +240,12 @@ struct ScreenshotEditorView: View {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 
-        let bgColor = NSColor(Color(hex: template.backgroundColorHex))
-        bgColor.setFill()
-        NSRect(x: 0, y: 0, width: size.width, height: size.height).fill()
+        if let bgImage = renderBackgroundImage(template.background, size: size) {
+            bgImage.draw(in: NSRect(origin: .zero, size: size))
+        } else {
+            NSColor(Color(hex: template.backgroundColorHex)).setFill()
+            NSRect(origin: .zero, size: size).fill()
+        }
 
         for layer in template.layers where layer.isVisible {
             let rect = CGRect(
@@ -166,9 +257,13 @@ struct ScreenshotEditorView: View {
             switch layer.type {
             case .text:
                 if let text = layer.text {
+                    let paragraph = NSMutableParagraphStyle()
+                    paragraph.alignment = layer.textAlignment.nsTextAlignment
                     let attrs: [NSAttributedString.Key: Any] = [
-                        .font: NSFont.systemFont(ofSize: layer.fontSizePt, weight: layer.isBold ? .bold : .regular),
-                        .foregroundColor: NSColor(Color(hex: layer.colorHex))
+                        .font: layer.resolvedNSFont(size: layer.fontSizePt),
+                        .foregroundColor: NSColor(Color(hex: layer.colorHex)),
+                        .paragraphStyle: paragraph,
+                        .kern: layer.tracking
                     ]
                     NSString(string: text).draw(in: rect, withAttributes: attrs)
                 }
@@ -187,6 +282,91 @@ struct ScreenshotEditorView: View {
               let pngRep = NSBitmapImageRep(data: tiff) else { return nil }
         return pngRep.representation(using: .png, properties: [:])
     }
+
+    @MainActor
+    private func renderBackgroundImage(_ background: CanvasBackground, size: CGSize) -> NSImage? {
+        let view = CanvasBackgroundFill(background: background)
+            .frame(width: size.width, height: size.height)
+        let renderer = ImageRenderer(content: view)
+        renderer.proposedSize = ProposedViewSize(width: size.width, height: size.height)
+        renderer.scale = 1
+        return renderer.nsImage
+    }
+}
+
+// MARK: - Template sidebar row
+
+private struct TemplateSidebarRow: View {
+    let template: ScreenshotTemplate
+    let isSelected: Bool
+    let isLast: Bool
+
+    private var deviceIcon: String {
+        switch template.deviceType {
+        case .iPadPro13: return "ipad"
+        default: return "iphone"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            timelineRail
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(template.name)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Image(systemName: deviceIcon)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(template.deviceType.rawValue)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.trailing, 8)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 4)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
+
+    private var timelineRail: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Circle()
+                    .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.18))
+                    .frame(width: 8, height: 8)
+                if isSelected {
+                    Circle()
+                        .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 3)
+                        .frame(width: 14, height: 14)
+                }
+            }
+            .frame(width: 14, height: 14)
+            .padding(.top, 10)
+
+            if !isLast {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(width: 1.5)
+                    .frame(maxHeight: .infinity)
+            }
+        }
+        .frame(width: 14)
+    }
 }
 
 // MARK: - Template editor (canvas + properties)
@@ -195,6 +375,13 @@ private struct TemplateEditorView: View {
     @Bindable var template: ScreenshotTemplate
     @State private var selectedLayerId: UUID?
     @State private var showAddImage = false
+    @State private var canvasZoom: CGFloat = 1.0
+    @State private var centerRequest = 0
+
+    private let canvasBaseWidth: CGFloat = 320
+    private let zoomStep: CGFloat = 0.25
+    private let minZoom: CGFloat = 0.25
+    private let maxZoom: CGFloat = 4.0
 
     var selectedLayer: Binding<ScreenshotLayer>? {
         guard let id = selectedLayerId,
@@ -216,7 +403,7 @@ private struct TemplateEditorView: View {
         HSplitView {
             canvasArea
             propertiesPanel
-                .frame(minWidth: 240, idealWidth: 260, maxWidth: 300)
+                .frame(minWidth: 260, idealWidth: 280, maxWidth: 320)
         }
         .fileImporter(
             isPresented: $showAddImage,
@@ -234,58 +421,143 @@ private struct TemplateEditorView: View {
     // MARK: Canvas
 
     private var canvasArea: some View {
-        ScrollView([.horizontal, .vertical]) {
-            ScreenshotCanvas(template: template, selectedLayerId: $selectedLayerId)
-                .frame(width: 280, height: 280 / template.deviceType.aspectRatio)
-                .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+        ZStack(alignment: .bottomTrailing) {
+            InfiniteCanvasView(
+                magnification: $canvasZoom,
+                minMagnification: minZoom,
+                maxMagnification: maxZoom,
+                centerRequest: centerRequest
+            ) {
+                ScreenshotCanvas(template: template, selectedLayerId: $selectedLayerId)
+                    .frame(
+                        width: canvasBaseWidth,
+                        height: canvasBaseWidth / template.deviceType.aspectRatio
+                    )
+                    .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            zoomControls
+                .padding(14)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.underPageBackgroundColor))
+        .focusable()
+        .onKeyPress("+") {
+            zoomCentered(by: +zoomStep)
+            return .handled
+        }
+        .onKeyPress("=") {
+            zoomCentered(by: +zoomStep)
+            return .handled
+        }
+        .onKeyPress("-") {
+            zoomCentered(by: -zoomStep)
+            return .handled
+        }
+        .onKeyPress("0") {
+            resetCanvasView()
+            return .handled
+        }
+    }
+
+    private var zoomControls: some View {
+        HStack(spacing: 6) {
+            Button {
+                zoomCentered(by: -zoomStep)
+            } label: {
+                Image(systemName: "minus.magnifyingglass")
+            }
+            .disabled(canvasZoom <= minZoom)
+            .help("Zoom out (centered)")
+
+            Text("\(Int((canvasZoom * 100).rounded()))%")
+                .font(.caption.monospacedDigit().weight(.medium))
+                .frame(minWidth: 40)
+                .foregroundStyle(.secondary)
+
+            Button {
+                zoomCentered(by: +zoomStep)
+            } label: {
+                Image(systemName: "plus.magnifyingglass")
+            }
+            .disabled(canvasZoom >= maxZoom)
+            .help("Zoom in (centered)")
+
+            Divider()
+                .frame(height: 14)
+
+            Button("Reset") {
+                resetCanvasView()
+            }
+            .help("Reset zoom and center the screenshot")
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+    }
+
+    /// Zoom controls always re-center the screenshot in the viewport.
+    private func zoomCentered(by delta: CGFloat) {
+        canvasZoom = min(maxZoom, max(minZoom, canvasZoom + delta))
+        centerRequest += 1
+    }
+
+    private func resetCanvasView() {
+        canvasZoom = 1.0
+        centerRequest += 1
     }
 
     // MARK: Properties
 
     private var propertiesPanel: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Properties")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("Inspector")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            Divider()
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    // Canvas settings
-                    GroupBox("Canvas") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Picker("Device", selection: $template.deviceType) {
-                                ForEach(DeviceType.allCases, id: \.self) { dt in
-                                    Text(dt.rawValue).tag(dt)
+                VStack(alignment: .leading, spacing: 18) {
+                    InspectorSection(title: "Canvas") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            InspectorLabeledRow("Device") {
+                                Picker("", selection: $template.deviceType) {
+                                    ForEach(DeviceType.allCases, id: \.self) { dt in
+                                        Text(dt.rawValue).tag(dt)
+                                    }
                                 }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
                             }
 
-                            ColorPicker("Background", selection: Binding(
-                                get: { Color(hex: template.backgroundColorHex) },
-                                set: { template.backgroundColorHex = $0.toHex() }
+                            BackgroundInspector(background: Binding(
+                                get: { template.background },
+                                set: { template.background = $0 }
                             ))
                         }
-                        .frame(maxWidth: .infinity)
                     }
 
-                    // Layer list
-                    GroupBox("Layers") {
-                        VStack(spacing: 6) {
+                    InspectorSection(title: "Layers") {
+                        VStack(spacing: 8) {
                             if template.layers.isEmpty {
                                 Text("No layers yet")
                                     .font(.caption)
                                     .foregroundStyle(.tertiary)
                                     .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 8)
+                                    .padding(.vertical, 10)
                             } else {
                                 ForEach(template.layers) { layer in
                                     LayerListRow(
@@ -294,8 +566,6 @@ private struct TemplateEditorView: View {
                                     ) {
                                         selectedLayerId = layer.id
                                     } onDelete: {
-                                        // Clear selection first so the stale Binding is never
-                                        // accessed during the re-render triggered by the mutation.
                                         if selectedLayerId == layer.id { selectedLayerId = nil }
                                         template.layers.removeAll { $0.id == layer.id }
                                     }
@@ -305,28 +575,30 @@ private struct TemplateEditorView: View {
                             HStack(spacing: 8) {
                                 Button { addTextLayer() } label: {
                                     Label("Text", systemImage: "textformat")
+                                        .frame(maxWidth: .infinity)
                                 }
-                                .buttonStyle(.bordered).controlSize(.small)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
 
                                 Button { showAddImage = true } label: {
                                     Label("Image", systemImage: "photo")
+                                        .frame(maxWidth: .infinity)
                                 }
-                                .buttonStyle(.bordered).controlSize(.small)
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
-                            .padding(.top, 4)
                         }
                     }
 
-                    // Selected layer properties
                     if let binding = selectedLayer {
-                        GroupBox("Layer Properties") {
-                            LayerPropertiesView(layer: binding)
-                        }
+                        LayerPropertiesView(layer: binding)
                     }
                 }
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 20)
             }
         }
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private func addTextLayer() {
@@ -351,50 +623,54 @@ private struct TemplateEditorView: View {
 private struct ScreenshotCanvas: View {
     let template: ScreenshotTemplate
     @Binding var selectedLayerId: UUID?
+    var isInteractive: Bool = true
     @State private var dragStart: [UUID: CGPoint] = [:]
 
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
-                Color(hex: template.backgroundColorHex)
+                CanvasBackgroundFill(background: template.background)
 
                 ForEach(template.layers.filter { $0.isVisible }) { layer in
                     layerView(layer, in: geo.size)
                         .overlay {
-                            if layer.id == selectedLayerId {
+                            if isInteractive, layer.id == selectedLayerId {
                                 RoundedRectangle(cornerRadius: 2)
                                     .stroke(Color.accentColor, lineWidth: 1.5)
                             }
                         }
                         .onTapGesture { selectedLayerId = layer.id }
-                        .gesture(
-                            DragGesture(minimumDistance: 2)
-                                .onChanged { value in
-                                    // Capture initial fraction once at drag start
-                                    if dragStart[layer.id] == nil {
-                                        dragStart[layer.id] = CGPoint(x: layer.xFraction, y: layer.yFraction)
-                                    }
-                                    guard let start = dragStart[layer.id],
-                                          let idx = template.layers.firstIndex(where: { $0.id == layer.id })
-                                    else { return }
-                                    // translation is always relative to drag origin, so arithmetic is stable
-                                    let newX = start.x + value.translation.width / geo.size.width
-                                    let newY = start.y + value.translation.height / geo.size.height
-                                    // Single read-modify-write to avoid a double JSON encode/decode.
-                                    var layers = template.layers
-                                    layers[idx].xFraction = max(0, min(0.95, newX))
-                                    layers[idx].yFraction = max(0, min(0.95, newY))
-                                    template.layers = layers
-                                }
-                                .onEnded { _ in
-                                    dragStart.removeValue(forKey: layer.id)
-                                    selectedLayerId = layer.id
-                                }
-                        )
+                        .gesture(layerDragGesture(layer, in: geo.size))
                 }
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .allowsHitTesting(isInteractive)
+    }
+
+    private func layerDragGesture(_ layer: ScreenshotLayer, in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                // Capture initial fraction once at drag start
+                if dragStart[layer.id] == nil {
+                    dragStart[layer.id] = CGPoint(x: layer.xFraction, y: layer.yFraction)
+                }
+                guard let start = dragStart[layer.id],
+                      let idx = template.layers.firstIndex(where: { $0.id == layer.id })
+                else { return }
+                // translation is always relative to drag origin, so arithmetic is stable
+                let newX = start.x + value.translation.width / size.width
+                let newY = start.y + value.translation.height / size.height
+                // Single read-modify-write to avoid a double JSON encode/decode.
+                var layers = template.layers
+                layers[idx].xFraction = max(0, min(0.95, newX))
+                layers[idx].yFraction = max(0, min(0.95, newY))
+                template.layers = layers
+            }
+            .onEnded { _ in
+                dragStart.removeValue(forKey: layer.id)
+                selectedLayerId = layer.id
+            }
     }
 
     @ViewBuilder
@@ -407,10 +683,14 @@ private struct ScreenshotCanvas: View {
         switch layer.type {
         case .text:
             Text(layer.text ?? "")
-                .font(.system(size: layer.fontSizePt * size.width / 375,
-                              weight: layer.isBold ? .bold : .regular))
+                .font(layer.resolvedSwiftUIFont(size: layer.fontSizePt * size.width / 375))
+                .tracking(layer.tracking * size.width / 375)
                 .foregroundStyle(Color(hex: layer.colorHex))
-                .frame(width: w, height: h, alignment: .center)
+                .multilineTextAlignment(
+                    layer.textAlignment == .leading ? .leading :
+                        layer.textAlignment == .trailing ? .trailing : .center
+                )
+                .frame(width: w, height: h, alignment: layer.textAlignment.swiftUI)
                 .position(x: x + w / 2, y: y + h / 2)
 
         case .image:
@@ -421,6 +701,597 @@ private struct ScreenshotCanvas: View {
                     .frame(width: w, height: h)
                     .position(x: x + w / 2, y: y + h / 2)
             }
+        }
+    }
+}
+
+// MARK: - App Store gallery preview
+
+private struct ScreenshotGalleryView: View {
+    let templates: [ScreenshotTemplate]
+    @Binding var selectedTemplate: ScreenshotTemplate?
+    var onOpenEditor: () -> Void
+
+    private struct DeviceGroup: Identifiable {
+        let device: DeviceType
+        let templates: [ScreenshotTemplate]
+        var id: String { device.rawValue }
+    }
+
+    private var groups: [DeviceGroup] {
+        DeviceType.allCases.compactMap { device in
+            let matched = templates.filter { $0.deviceType == device }
+            guard !matched.isEmpty else { return nil }
+            return DeviceGroup(device: device, templates: matched)
+        }
+    }
+
+    var body: some View {
+        Group {
+            if templates.isEmpty {
+                emptyState
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 36) {
+                        header
+
+                        ForEach(groups) { group in
+                            deviceSection(group)
+                        }
+                    }
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.underPageBackgroundColor))
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("App Store Preview")
+                .font(.title2.weight(.semibold))
+            Text("Screenshots as they appear on the product page, grouped by device.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 28)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "rectangle.stack")
+                .font(.system(size: 32))
+                .foregroundStyle(.tertiary)
+                .padding(.top, 48)
+            Text("No Screenshots")
+                .font(.headline)
+            Text("Create templates to preview them in App Store layout.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.horizontal, 32)
+    }
+
+    private func deviceSection(_ group: DeviceGroup) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(group.device.rawValue)
+                    .font(.headline)
+                Text("\(group.templates.count)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+            }
+            .padding(.horizontal, 28)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .bottom, spacing: 18) {
+                    ForEach(group.templates, id: \.persistentModelID) { template in
+                        galleryCard(template)
+                    }
+                }
+                .padding(.horizontal, 28)
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
+    private func galleryCard(_ template: ScreenshotTemplate) -> some View {
+        let isSelected = selectedTemplate?.persistentModelID == template.persistentModelID
+        let cardWidth: CGFloat = template.deviceType == .iPadPro13 ? 220 : 180
+        let cardHeight = cardWidth / template.deviceType.aspectRatio
+
+        return VStack(spacing: 10) {
+            ZStack {
+                ScreenshotCanvas(
+                    template: template,
+                    selectedLayerId: .constant(nil),
+                    isInteractive: false
+                )
+                .frame(width: cardWidth, height: cardHeight)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(0.22), radius: 18, y: 10)
+
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                        .padding(-5)
+                }
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .onTapGesture(count: 2) {
+                selectedTemplate = template
+                onOpenEditor()
+            }
+            .onTapGesture {
+                selectedTemplate = template
+            }
+            .contextMenu {
+                Button("Edit Screenshot") {
+                    selectedTemplate = template
+                    onOpenEditor()
+                }
+            }
+
+            Text(template.name)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .lineLimit(1)
+                .frame(width: cardWidth)
+        }
+    }
+}
+
+// MARK: - Inspector chrome
+
+private struct InspectorSection<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .tracking(0.4)
+
+            content
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                }
+        }
+    }
+}
+
+private struct InspectorLabeledRow<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .frame(width: 72, alignment: .leading)
+            content
+        }
+    }
+}
+
+// MARK: - Background inspector
+
+private struct BackgroundInspector: View {
+    @Binding var background: CanvasBackground
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Background")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            // Live preview
+            CanvasBackgroundFill(background: background)
+                .frame(height: 72)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                }
+
+            // Kind picker
+            HStack(spacing: 4) {
+                ForEach(CanvasBackgroundKind.allCases) { kind in
+                    Button {
+                        background.kind = kind
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: kind.symbol)
+                                .font(.system(size: 12, weight: .semibold))
+                                .frame(width: 16, height: 16)
+                            Text(kind.title)
+                                .font(.caption2.weight(.medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
+                        }
+                        .foregroundStyle(background.kind == kind ? Color.accentColor : .secondary)
+                        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44)
+                        .background {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(background.kind == kind ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.04))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                    .help(kind.title)
+                }
+            }
+
+            switch background.kind {
+            case .solid:
+                InspectorLabeledRow("Color") {
+                    ColorPicker("", selection: Binding(
+                        get: { Color(hex: background.solidHex) },
+                        set: { background.solidHex = $0.toHex() }
+                    ))
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+            case .linear:
+                gradientStopsEditor
+                InspectorLabeledRow("Angle") {
+                    Slider(value: $background.linearAngle, in: 0...360, step: 1)
+                    Text("\(Int(background.linearAngle))°")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+
+            case .radial:
+                gradientStopsEditor
+                InspectorLabeledRow("Center X") {
+                    Slider(value: $background.radialCenterX, in: 0...1)
+                    Text("\(Int(background.radialCenterX * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+                InspectorLabeledRow("Center Y") {
+                    Slider(value: $background.radialCenterY, in: 0...1)
+                    Text("\(Int(background.radialCenterY * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+
+            case .mesh:
+                MeshGradientEditor(background: $background)
+            }
+        }
+    }
+
+    private var gradientStopsEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Colors")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if background.stops.count < 5 {
+                    Button {
+                        let last = background.sortedStops.last?.location ?? 0
+                        background.stops.append(
+                            GradientStop(hex: "#FFFFFF", location: min(1, last + 0.25))
+                        )
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Add color stop")
+                }
+            }
+
+            ForEach(Array(background.stops.enumerated()), id: \.element.id) { index, stop in
+                HStack(spacing: 8) {
+                    ColorPicker("", selection: Binding(
+                        get: { Color(hex: background.stops[index].hex) },
+                        set: { background.stops[index].hex = $0.toHex() }
+                    ))
+                    .labelsHidden()
+                    .frame(width: 36)
+
+                    Slider(
+                        value: Binding(
+                            get: { background.stops[index].location },
+                            set: { background.stops[index].location = $0 }
+                        ),
+                        in: 0...1
+                    )
+
+                    if background.stops.count > 2 {
+                        Button {
+                            background.stops.removeAll { $0.id == stop.id }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.red.opacity(0.75))
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Mesh gradient editor
+
+private struct MeshGradientEditor: View {
+    @Binding var background: CanvasBackground
+    @State private var selectedIndex: Int = 4
+
+    private var pointCount: Int { background.meshWidth * background.meshHeight }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Mesh")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(background.meshWidth)×\(background.meshHeight)")
+                    .font(.caption.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.tertiary)
+            }
+
+            InspectorLabeledRow("Columns") {
+                Stepper(
+                    "",
+                    value: Binding(
+                        get: { background.meshWidth },
+                        set: { newValue in
+                            background.resizeMesh(width: newValue, height: background.meshHeight)
+                            selectedIndex = min(selectedIndex, pointCount - 1)
+                        }
+                    ),
+                    in: 2...5
+                )
+                .labelsHidden()
+                Text("\(background.meshWidth)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, alignment: .trailing)
+            }
+
+            InspectorLabeledRow("Rows") {
+                Stepper(
+                    "",
+                    value: Binding(
+                        get: { background.meshHeight },
+                        set: { newValue in
+                            background.resizeMesh(width: background.meshWidth, height: newValue)
+                            selectedIndex = min(selectedIndex, max(0, background.meshWidth * background.meshHeight - 1))
+                        }
+                    ),
+                    in: 2...5
+                )
+                .labelsHidden()
+                Text("\(background.meshHeight)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16, alignment: .trailing)
+            }
+
+            // Interactive point editor
+            MeshPointCanvas(background: $background, selectedIndex: $selectedIndex)
+                .frame(height: 150)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                }
+
+            HStack {
+                Text("Point \(selectedIndex + 1)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset Positions") {
+                    background.resetMeshPositions()
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .help("Return all points to a regular grid")
+            }
+
+            if selectedIndex >= 0, selectedIndex < background.meshPoints.count {
+                InspectorLabeledRow("Color") {
+                    ColorPicker("", selection: Binding(
+                        get: {
+                            let hex = selectedIndex < background.meshColors.count
+                                ? background.meshColors[selectedIndex]
+                                : "#1A1A2E"
+                            return Color(hex: hex)
+                        },
+                        set: { color in
+                            background.normalizeMesh()
+                            guard selectedIndex < background.meshColors.count else { return }
+                            background.meshColors[selectedIndex] = color.toHex()
+                        }
+                    ))
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+
+                InspectorLabeledRow("X") {
+                    Slider(
+                        value: Binding(
+                            get: { background.meshPoints[selectedIndex].x },
+                            set: { background.meshPoints[selectedIndex].x = min(1, max(0, $0)) }
+                        ),
+                        in: 0...1
+                    )
+                    Text("\(Int(background.meshPoints[selectedIndex].x * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+
+                InspectorLabeledRow("Y") {
+                    Slider(
+                        value: Binding(
+                            get: { background.meshPoints[selectedIndex].y },
+                            set: { background.meshPoints[selectedIndex].y = min(1, max(0, $0)) }
+                        ),
+                        in: 0...1
+                    )
+                    Text("\(Int(background.meshPoints[selectedIndex].y * 100))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+
+            // Color grid for quick access
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: background.meshWidth),
+                spacing: 6
+            ) {
+                ForEach(0..<pointCount, id: \.self) { index in
+                    Button {
+                        selectedIndex = index
+                    } label: {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color(hex: index < background.meshColors.count ? background.meshColors[index] : "#1A1A2E"))
+                            .frame(height: 22)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .strokeBorder(
+                                        selectedIndex == index ? Color.accentColor : Color.primary.opacity(0.12),
+                                        lineWidth: selectedIndex == index ? 2 : 1
+                                    )
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Select point \(index + 1)")
+                }
+            }
+        }
+        .onAppear {
+            background.normalizeMesh()
+            selectedIndex = min(selectedIndex, max(0, pointCount - 1))
+        }
+        .onChange(of: background.meshWidth) { _, _ in
+            selectedIndex = min(selectedIndex, max(0, pointCount - 1))
+        }
+        .onChange(of: background.meshHeight) { _, _ in
+            selectedIndex = min(selectedIndex, max(0, pointCount - 1))
+        }
+    }
+}
+
+private struct MeshPointCanvas: View {
+    @Binding var background: CanvasBackground
+    @Binding var selectedIndex: Int
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                CanvasBackgroundFill(background: background)
+
+                // Light grid guides
+                Path { path in
+                    let w = background.meshWidth
+                    let h = background.meshHeight
+                    guard w > 1, h > 1 else { return }
+                    for col in 0..<w {
+                        for row in 0..<h {
+                            let index = row * w + col
+                            guard index < background.meshPoints.count else { continue }
+                            let point = background.meshPoints[index]
+                            let origin = CGPoint(
+                                x: point.x * geo.size.width,
+                                y: point.y * geo.size.height
+                            )
+                            if col + 1 < w {
+                                let rightIndex = row * w + col + 1
+                                if rightIndex < background.meshPoints.count {
+                                    let right = background.meshPoints[rightIndex]
+                                    path.move(to: origin)
+                                    path.addLine(to: CGPoint(
+                                        x: right.x * geo.size.width,
+                                        y: right.y * geo.size.height
+                                    ))
+                                }
+                            }
+                            if row + 1 < h {
+                                let belowIndex = (row + 1) * w + col
+                                if belowIndex < background.meshPoints.count {
+                                    let below = background.meshPoints[belowIndex]
+                                    path.move(to: origin)
+                                    path.addLine(to: CGPoint(
+                                        x: below.x * geo.size.width,
+                                        y: below.y * geo.size.height
+                                    ))
+                                }
+                            }
+                        }
+                    }
+                }
+                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                .allowsHitTesting(false)
+
+                ForEach(Array(background.meshPoints.enumerated()), id: \.element.id) { index, point in
+                    let position = CGPoint(
+                        x: point.x * geo.size.width,
+                        y: point.y * geo.size.height
+                    )
+                    Circle()
+                        .fill(Color(hex: index < background.meshColors.count ? background.meshColors[index] : "#FFFFFF"))
+                        .frame(width: selectedIndex == index ? 16 : 12, height: selectedIndex == index ? 16 : 12)
+                        .overlay {
+                            Circle()
+                                .strokeBorder(Color.white, lineWidth: selectedIndex == index ? 2.5 : 1.5)
+                        }
+                        .shadow(color: .black.opacity(0.35), radius: 2, y: 1)
+                        .position(position)
+                        .gesture(
+                            DragGesture(minimumDistance: 0, coordinateSpace: .named("meshCanvas"))
+                                .onChanged { value in
+                                    selectedIndex = index
+                                    background.meshPoints[index] = MeshControlPoint(
+                                        id: background.meshPoints[index].id,
+                                        x: value.location.x / max(geo.size.width, 1),
+                                        y: value.location.y / max(geo.size.height, 1)
+                                    )
+                                }
+                        )
+                }
+            }
+            .coordinateSpace(name: "meshCanvas")
+            .contentShape(Rectangle())
         }
     }
 }
@@ -436,7 +1307,7 @@ private struct LayerListRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: layer.type == .text ? "textformat" : "photo")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 16)
 
             Text(layer.type == .text ? (layer.text ?? "Text") : "Image")
@@ -450,9 +1321,11 @@ private struct LayerListRow: View {
             .buttonStyle(.borderless)
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 6))
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
     }
@@ -463,68 +1336,124 @@ private struct LayerListRow: View {
 private struct LayerPropertiesView: View {
     @Binding var layer: ScreenshotLayer
 
+    private var fontFamilies: [String] { ScreenshotFontFamily.allFamilies }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 18) {
             if layer.type == .text {
-                LabeledContent("Text") {
-                    TextField("Text", text: Binding(
-                        get: { layer.text ?? "" },
-                        set: { layer.text = $0 }
-                    ))
-                    .textFieldStyle(.plain)
-                    .multilineTextAlignment(.trailing)
+                InspectorSection(title: "Text") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Content")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                            TextField("Text", text: Binding(
+                                get: { layer.text ?? "" },
+                                set: { layer.text = $0 }
+                            ), axis: .vertical)
+                            .lineLimit(2...4)
+                            .textFieldStyle(.roundedBorder)
+                        }
+
+                        InspectorLabeledRow("Font") {
+                            Picker("", selection: $layer.fontFamily) {
+                                ForEach(fontFamilies, id: \.self) { family in
+                                    Text(family)
+                                        .font(previewFont(for: family))
+                                        .tag(family)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        InspectorLabeledRow("Weight") {
+                            Picker("", selection: Binding(
+                                get: { layer.fontWeight },
+                                set: { layer.fontWeight = $0 }
+                            )) {
+                                ForEach(LayerFontWeight.allCases) { weight in
+                                    Text(weight.title).tag(weight)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        InspectorLabeledRow("Size") {
+                            Slider(value: $layer.fontSizePt, in: 12...140, step: 1)
+                            Text("\(Int(layer.fontSizePt))")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, alignment: .trailing)
+                        }
+
+                        InspectorLabeledRow("Align") {
+                            Picker("", selection: Binding(
+                                get: { layer.textAlignment },
+                                set: { layer.textAlignment = $0 }
+                            )) {
+                                ForEach(LayerTextAlignment.allCases) { alignment in
+                                    Image(systemName: alignment.symbol)
+                                        .tag(alignment)
+                                        .help(alignment.title)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+
+                        InspectorLabeledRow("Tracking") {
+                            Slider(value: $layer.tracking, in: -6...16, step: 0.5)
+                            Text(String(format: "%.1f", layer.tracking))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, alignment: .trailing)
+                        }
+
+                        Toggle("Italic", isOn: $layer.isItalic)
+
+                        InspectorLabeledRow("Color") {
+                            ColorPicker("", selection: Binding(
+                                get: { Color(hex: layer.colorHex) },
+                                set: { layer.colorHex = $0.toHex() }
+                            ))
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }
                 }
+            }
 
-                LabeledContent("Font size") {
-                    Slider(value: $layer.fontSizePt, in: 12...120, step: 2)
-                    Text("\(Int(layer.fontSizePt))pt")
-                        .font(.caption)
-                        .monospacedDigit()
-                        .frame(width: 36)
+            InspectorSection(title: "Layout") {
+                VStack(alignment: .leading, spacing: 10) {
+                    layoutSlider("X", value: $layer.xFraction, range: 0...0.9)
+                    layoutSlider("Y", value: $layer.yFraction, range: 0...0.9)
+                    layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.0)
+                    layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.0)
+                    Toggle("Visible", isOn: $layer.isVisible)
                 }
-
-                Toggle("Bold", isOn: $layer.isBold)
-
-                ColorPicker("Color", selection: Binding(
-                    get: { Color(hex: layer.colorHex) },
-                    set: { layer.colorHex = $0.toHex() }
-                ))
             }
-
-            Divider()
-
-            Text("Position & Size")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            LabeledContent("X") {
-                Slider(value: $layer.xFraction, in: 0...0.9)
-                Text(String(format: "%.0f%%", layer.xFraction * 100))
-                    .font(.caption).monospacedDigit().frame(width: 36)
-            }
-
-            LabeledContent("Y") {
-                Slider(value: $layer.yFraction, in: 0...0.9)
-                Text(String(format: "%.0f%%", layer.yFraction * 100))
-                    .font(.caption).monospacedDigit().frame(width: 36)
-            }
-
-            LabeledContent("Width") {
-                Slider(value: $layer.widthFraction, in: 0.05...1.0)
-                Text(String(format: "%.0f%%", layer.widthFraction * 100))
-                    .font(.caption).monospacedDigit().frame(width: 36)
-            }
-
-            LabeledContent("Height") {
-                Slider(value: $layer.heightFraction, in: 0.02...1.0)
-                Text(String(format: "%.0f%%", layer.heightFraction * 100))
-                    .font(.caption).monospacedDigit().frame(width: 36)
-            }
-
-            Toggle("Visible", isOn: $layer.isVisible)
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    private func layoutSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+        InspectorLabeledRow(title) {
+            Slider(value: value, in: range)
+            Text(String(format: "%.0f%%", value.wrappedValue * 100))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .trailing)
+        }
+    }
+
+    private func previewFont(for family: String) -> Font {
+        if ScreenshotFontFamily.isSystem(family) {
+            return .system(.body, design: ScreenshotFontFamily.design(for: family))
+        }
+        return .custom(family, size: NSFont.systemFontSize)
     }
 }
 
@@ -537,7 +1466,7 @@ private struct NewTemplateSheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
 
-    @State private var name = "Screenshot 1"
+    @State private var name: String = ""
     @State private var deviceType: DeviceType = .iPhone67
 
     var body: some View {
@@ -574,6 +1503,11 @@ private struct NewTemplateSheet: View {
             }
         }
         .frame(minWidth: 360, minHeight: 320)
+        .onAppear {
+            if name.isEmpty {
+                name = nextScreenshotName(existing: app.screenshotTemplates.map(\.name))
+            }
+        }
     }
 
     private func createTemplate() {
@@ -584,6 +1518,22 @@ private struct NewTemplateSheet: View {
         onCreated(template)
         dismiss()
     }
+}
+
+/// Picks the next "Screenshot N" name that is not already used.
+private func nextScreenshotName(existing names: [String]) -> String {
+    let pattern = /^Screenshot\s+(\d+)$/
+    var used = Set<Int>()
+    for name in names {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let match = trimmed.wholeMatch(of: pattern),
+           let value = Int(match.1) {
+            used.insert(value)
+        }
+    }
+    var next = 1
+    while used.contains(next) { next += 1 }
+    return "Screenshot \(next)"
 }
 
 // MARK: - Upload to ASC sheet
@@ -626,7 +1576,7 @@ private struct UploadScreenshotSheet: View {
                     } else {
                         Picker("Locale", selection: $selectedLocalizationId) {
                             ForEach(availableLocalizations, id: \.id) { loc in
-                                Text(Locale.current.localizedString(forLanguageCode: loc.locale) ?? loc.locale)
+                                Text(LocaleDisplayName.name(for: loc.locale))
                                     .tag(loc.id)
                             }
                         }

@@ -29,7 +29,7 @@ struct MetadataDetailView: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 180)
+                    .frame(minWidth: 180, idealWidth: 220)
 
                     Spacer()
 
@@ -74,6 +74,6 @@ struct MetadataDetailView: View {
     }
 
     private func localeName(for code: String) -> String {
-        Locale.current.localizedString(forLanguageCode: code) ?? code
+        LocaleDisplayName.name(for: code)
     }
 }

@@ -11,6 +11,8 @@ struct ListingTabView: View {
     @State private var syncError: String?
     @State private var pushError: String?
     @State private var showDiff = false
+    @State private var importMessage: String?
+    @State private var importSucceeded = false
 
     var sortedSnapshots: [MetadataSnapshot] {
         app.snapshots.sorted { $0.capturedAt > $1.capturedAt }
@@ -19,7 +21,7 @@ struct ListingTabView: View {
     var body: some View {
         HSplitView {
             snapshotHistoryPanel
-                .frame(minWidth: 180, idealWidth: 210, maxWidth: 260)
+                .frame(minWidth: 200, idealWidth: 220, maxWidth: 280)
             contentPanel
         }
         .toolbar {
@@ -30,6 +32,23 @@ struct ListingTabView: View {
                     }
                     .help("Compare last two snapshots")
                 }
+
+                Button(action: importMarkdown) {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                }
+                .disabled(sortedSnapshots.isEmpty)
+                .help("Import listing metadata from Markdown")
+
+                Button(action: exportCurrentMarkdown) {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .disabled(sortedSnapshots.isEmpty)
+                .help("Export current metadata as Markdown")
+
+                Button(action: downloadSampleTemplate) {
+                    Label("Sample", systemImage: "doc.badge.plus")
+                }
+                .help("Download a sample Markdown template")
 
                 Button(action: pushChanges) {
                     if isPushing {
@@ -73,6 +92,14 @@ struct ListingTabView: View {
         } message: {
             Text(pushError ?? "")
         }
+        .alert(importSucceeded ? "Import Complete" : "Import Failed", isPresented: Binding(
+            get: { importMessage != nil },
+            set: { if !$0 { importMessage = nil } }
+        )) {
+            Button("OK") { importMessage = nil }
+        } message: {
+            Text(importMessage ?? "")
+        }
         .onAppear {
             if selectedSnapshot == nil {
                 selectedSnapshot = sortedSnapshots.first
@@ -83,20 +110,22 @@ struct ListingTabView: View {
     // MARK: - Panels
 
     private var snapshotHistoryPanel: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Snapshots")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text("History")
+                    .font(.system(.subheadline, weight: .semibold))
+                    .foregroundStyle(.primary)
                 Text("\(sortedSnapshots.count)")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(Color.primary.opacity(0.06), in: Capsule())
+                Spacer(minLength: 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            Divider()
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
 
             if sortedSnapshots.isEmpty {
                 VStack(spacing: 8) {
@@ -110,19 +139,29 @@ struct ListingTabView: View {
                         .font(.caption2)
                         .foregroundStyle(.quaternary)
                 }
-                .padding(.top, 24)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 28)
                 Spacer()
             } else {
-                List(sortedSnapshots, selection: $selectedSnapshot) { snapshot in
-                    SnapshotRow(
-                        snapshot: snapshot,
-                        isLatest: snapshot == sortedSnapshots.first
-                    )
-                    .tag(snapshot as MetadataSnapshot?)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(sortedSnapshots.enumerated()), id: \.element.id) { index, snapshot in
+                            SnapshotTimelineRow(
+                                snapshot: snapshot,
+                                isLatest: index == 0,
+                                isSelected: selectedSnapshot == snapshot,
+                                isLast: index == sortedSnapshots.count - 1
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture { selectedSnapshot = snapshot }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 12)
                 }
-                .listStyle(.sidebar)
             }
         }
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var contentPanel: some View {
@@ -149,6 +188,70 @@ struct ListingTabView: View {
                 .padding(.horizontal, 32)
             }
         }
+    }
+
+    // MARK: - Markdown import / export
+
+    private func importMarkdown() {
+        guard let latest = sortedSnapshots.first else {
+            importSucceeded = false
+            importMessage = "Sync metadata first, then import into the latest snapshot."
+            return
+        }
+        guard let urls = MetadataMarkdownImporter.presentOpenPanel(), !urls.isEmpty else { return }
+
+        do {
+            var allBlocks: [MetadataMarkdownImporter.LocaleBlock] = []
+            for url in urls {
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+                allBlocks.append(contentsOf: try MetadataMarkdownImporter.parse(fileURL: url))
+            }
+
+            // Last block wins if the same locale appears more than once.
+            var merged: [String: MetadataMarkdownImporter.LocaleBlock] = [:]
+            for block in allBlocks {
+                merged[block.locale] = block
+            }
+
+            let result = MetadataMarkdownImporter.apply(
+                blocks: Array(merged.values),
+                to: latest
+            )
+            selectedSnapshot = latest
+            importSucceeded = !result.updatedLocales.isEmpty
+
+            var lines: [String] = []
+            if !result.updatedLocales.isEmpty {
+                lines.append("Updated \(result.updatedLocales.count) locale(s): \(result.updatedLocales.joined(separator: ", ")).")
+            }
+            if !result.unknownLocales.isEmpty {
+                lines.append("Skipped unknown locale(s) not in this snapshot: \(result.unknownLocales.joined(separator: ", ")). Sync first if you need them.")
+            }
+            if result.updatedLocales.isEmpty && result.unknownLocales.isEmpty {
+                lines.append("No fields were updated. Check that your ## sections have content.")
+            }
+            importMessage = lines.joined(separator: "\n")
+        } catch {
+            importSucceeded = false
+            importMessage = error.localizedDescription
+        }
+    }
+
+    private func exportCurrentMarkdown() {
+        guard let snapshot = selectedSnapshot ?? sortedSnapshots.first else { return }
+        let markdown = MetadataMarkdownImporter.exportMarkdown(from: snapshot)
+        let name = "\(app.name.isEmpty ? "app" : app.name)-metadata.md"
+            .replacingOccurrences(of: "/", with: "-")
+        _ = MetadataMarkdownImporter.presentSavePanel(defaultName: name, contents: markdown)
+    }
+
+    private func downloadSampleTemplate() {
+        let markdown = MetadataMarkdownImporter.bundledSampleMarkdown()
+        _ = MetadataMarkdownImporter.presentSavePanel(
+            defaultName: "stor-metadata-sample.md",
+            contents: markdown
+        )
     }
 
     // MARK: - Push
@@ -262,36 +365,90 @@ struct ListingTabView: View {
     }
 }
 
-// MARK: - Snapshot row
+// MARK: - Snapshot timeline row
 
-private struct SnapshotRow: View {
+private struct SnapshotTimelineRow: View {
     let snapshot: MetadataSnapshot
     let isLatest: Bool
+    let isSelected: Bool
+    let isLast: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                Text(snapshot.capturedAt, style: .date)
-                    .fontWeight(.medium)
-                    .font(.callout)
-                if isLatest {
-                    Text("Latest")
-                        .font(.caption2)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(.blue.opacity(0.15), in: Capsule())
-                        .foregroundStyle(.blue)
+        HStack(alignment: .top, spacing: 10) {
+            timelineRail
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(snapshot.capturedAt, format: .dateTime.month(.abbreviated).day().year())
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+
+                    if isLatest {
+                        Text("Latest")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor, in: Capsule())
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    Text(snapshot.capturedAt, format: .dateTime.hour().minute())
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+
+                    if let v = snapshot.versionString {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text("v\(v)")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
             }
-            Text(snapshot.capturedAt, style: .time)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            if let v = snapshot.versionString {
-                Text("v\(v)")
-                    .font(.caption2)
-                    .foregroundStyle(.blue)
+            .padding(.vertical, 8)
+            .padding(.trailing, 8)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 4)
+        .padding(.trailing, 4)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
             }
         }
-        .padding(.vertical, 2)
+        .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
+
+    private var timelineRail: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Circle()
+                    .fill(isSelected || isLatest ? Color.accentColor : Color.primary.opacity(0.18))
+                    .frame(width: 8, height: 8)
+                if isSelected {
+                    Circle()
+                        .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 3)
+                        .frame(width: 14, height: 14)
+                }
+            }
+            .frame(width: 14, height: 14)
+            .padding(.top, 10)
+
+            if !isLast {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.12))
+                    .frame(width: 1.5)
+                    .frame(maxHeight: .infinity)
+            }
+        }
+        .frame(width: 14)
     }
 }
+

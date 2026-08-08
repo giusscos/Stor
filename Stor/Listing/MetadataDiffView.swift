@@ -27,12 +27,12 @@ struct MetadataDiffView: View {
                 HStack {
                     Picker("Locale", selection: $selectedLocale) {
                         ForEach(availableLocales, id: \.self) { locale in
-                            Text(Locale.current.localizedString(forLanguageCode: locale) ?? locale)
+                            Text(LocaleDisplayName.name(for: locale))
                                 .tag(locale as String?)
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 180)
+                    .frame(minWidth: 180, idealWidth: 220)
 
                     Spacer()
 
