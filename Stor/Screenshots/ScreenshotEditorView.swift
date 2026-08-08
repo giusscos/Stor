@@ -1046,26 +1046,55 @@ private struct ScreenshotGalleryView: View {
 private struct InspectorSection<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
+    @State private var isExpanded: Bool
+
+    init(title: String, startsExpanded: Bool = true, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+        self._isExpanded = State(initialValue: startsExpanded)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-                .tracking(0.4)
-
-            content
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        VStack(alignment: .leading, spacing: isExpanded ? 10 : 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isExpanded.toggle()
                 }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                        .tracking(0.4)
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+                .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(title)" : "Expand \(title)")
+
+            if isExpanded {
+                content
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.primary.opacity(0.04))
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
     }
 }
@@ -1500,7 +1529,7 @@ private struct LayerListRow: View {
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 16)
 
-            Text(layer.type == .text ? (layer.resolvedText(for: previewLocale) ?? "Text") : "Image")
+            Text(layer.type == .text ? layer.plainPreviewLabel(for: previewLocale) : "Image")
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1530,7 +1559,17 @@ private struct LayerPropertiesView: View {
     var availableLocales: [String]
     var onLocaleChange: (String) -> Void
 
+    @State private var activeMarkdownFormats: Set<MarkdownInlineFormat> = []
+    @State private var pendingMarkdownAction: MarkdownEditorAction?
+
     private var fontFamilies: [String] { ScreenshotFontFamily.allFamilies }
+
+    private var contentTextBinding: Binding<String> {
+        Binding(
+            get: { layer.resolvedText(for: previewLocale) ?? "" },
+            set: { layer.setResolvedText($0, for: previewLocale, primaryLocale: primaryLocale) }
+        )
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -1553,34 +1592,16 @@ private struct LayerPropertiesView: View {
                             }
                         }
 
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Content")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
-                            TextField("Text", text: Binding(
-                                get: { layer.resolvedText(for: previewLocale) ?? "" },
-                                set: { layer.setResolvedText($0, for: previewLocale, primaryLocale: primaryLocale) }
-                            ), axis: .vertical)
-                            .lineLimit(2...4)
-                            .textFieldStyle(.roundedBorder)
 
-                            Toggle("Markdown", isOn: $layer.textUsesMarkdown)
-                            if layer.textUsesMarkdown {
-                                Text("Standard Markdown only: **bold**, *italic*. Color stays layer-wide (inline color isn’t in Markdown).")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                HStack(spacing: 8) {
-                                    Button("Bold") {
-                                        wrapMarkdown("**")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                    Button("Italic") {
-                                        wrapMarkdown("*")
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-                                }
+                            contentEditor
+                        }
+                        .onAppear {
+                            if !layer.textUsesMarkdown {
+                                layer.textUsesMarkdown = true
                             }
                         }
 
@@ -1732,16 +1753,78 @@ private struct LayerPropertiesView: View {
         }
     }
 
-    private func wrapMarkdown(_ marker: String) {
-        let current = layer.resolvedText(for: previewLocale) ?? ""
-        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        let wrapped: String
-        if trimmed.hasPrefix(marker), trimmed.hasSuffix(marker), trimmed.count >= marker.count * 2 {
-            wrapped = String(trimmed.dropFirst(marker.count).dropLast(marker.count))
-        } else {
-            wrapped = "\(marker)\(trimmed)\(marker)"
+    @ViewBuilder
+    private var contentEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                ForEach(MarkdownInlineFormat.toolbarOrder, id: \.self) { format in
+                    markdownFormatButton(
+                        systemName: format.systemImage,
+                        help: format.help,
+                        isActive: activeMarkdownFormats.contains(format)
+                    ) {
+                        ensureMarkdownEnabled()
+                        pendingMarkdownAction = MarkdownEditorAction(.toggle(format))
+                    }
+                }
+
+                markdownFormatButton(
+                    systemName: "xmark.circle",
+                    help: "Clear Formatting",
+                    isActive: false
+                ) {
+                    ensureMarkdownEnabled()
+                    pendingMarkdownAction = MarkdownEditorAction(.clear)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            MarkdownRichTextEditor(
+                markdown: contentTextBinding,
+                activeFormats: $activeMarkdownFormats,
+                pendingAction: $pendingMarkdownAction,
+                textColorHex: layer.colorHex,
+                alignment: layer.textAlignment.nsTextAlignment,
+                minHeight: 88
+            )
+            .frame(minHeight: 88, maxHeight: 140)
         }
-        layer.setResolvedText(wrapped, for: previewLocale, primaryLocale: primaryLocale)
+    }
+
+    private func markdownFormatButton(
+        systemName: String,
+        help: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 24, height: 22)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .background {
+            if isActive {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.22))
+            }
+        }
+        .overlay {
+            if isActive {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1)
+            }
+        }
+        .help(help)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+
+    private func ensureMarkdownEnabled() {
+        if !layer.textUsesMarkdown {
+            layer.textUsesMarkdown = true
+        }
     }
 
     private func layoutSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {

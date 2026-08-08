@@ -518,7 +518,8 @@ extension ScreenshotLayer {
     }
 
     /// Builds an attributed string for canvas preview / export, applying layer style
-    /// and optional Markdown (`**bold**`, `*italic*`) when `textUsesMarkdown` is on.
+    /// and Markdown inline styles when `textUsesMarkdown` is on:
+    /// `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `++underline++`.
     func resolvedAttributedString(
         for locale: String?,
         fontSize: CGFloat,
@@ -544,12 +545,15 @@ extension ScreenshotLayer {
             return NSAttributedString(string: raw, attributes: baseAttrs)
         }
 
+        // `~~strike~~` and `++underline++` aren't CommonMark — sentinel-encode, parse, then style.
+        let markdownSource = Self.encodeCustomInlineMarkers(in: raw)
+
         let markdownOptions: AttributedString.MarkdownParsingOptions = {
             var options = AttributedString.MarkdownParsingOptions()
             options.interpretedSyntax = .inlineOnlyPreservingWhitespace
             return options
         }()
-        guard let markdown = try? AttributedString(markdown: raw, options: markdownOptions) else {
+        guard let markdown = try? AttributedString(markdown: markdownSource, options: markdownOptions) else {
             return NSAttributedString(string: raw, attributes: baseAttrs)
         }
 
@@ -560,44 +564,168 @@ extension ScreenshotLayer {
             let intent = run.inlinePresentationIntent
             let wantsBold = intent?.contains(.stronglyEmphasized) == true
             let wantsItalic = intent?.contains(.emphasized) == true
-            if wantsBold || wantsItalic {
+            let wantsCode = intent?.contains(.code) == true
+
+            if wantsCode {
+                attrs[.font] = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+            } else if wantsBold || wantsItalic {
                 var traits: NSFontTraitMask = []
                 if wantsBold { traits.insert(.boldFontMask) }
                 if wantsItalic { traits.insert(.italicFontMask) }
                 attrs[.font] = NSFontManager.shared.convert(baseFont, toHaveTrait: traits)
             }
+
             result.append(NSAttributedString(string: substring, attributes: attrs))
         }
+
+        Self.applyAndStripCustomSentinels(in: result, color: baseColor)
+
         return result
     }
 
     /// SwiftUI text for canvas preview (plain or Markdown).
+    /// Shares the AppKit attributed path with export so inline styles match PNG output.
     func resolvedPreviewText(for locale: String?, fontSize: CGFloat, scale: CGFloat) -> Text {
-        let raw = resolvedText(for: locale) ?? ""
-        let base = resolvedSwiftUIFont(size: fontSize)
-        let color = Color(hex: colorHex)
-
-        guard textUsesMarkdown else {
-            return Text(raw)
-                .font(base)
-                .tracking(tracking * Double(scale))
-                .foregroundStyle(color)
+        guard let nsAttributed = resolvedAttributedString(
+            for: locale,
+            fontSize: fontSize,
+            scale: scale
+        ) else {
+            return Text("")
         }
+        return Text(AttributedString(nsAttributed))
+    }
 
-        let markdownOptions: AttributedString.MarkdownParsingOptions = {
-            var options = AttributedString.MarkdownParsingOptions()
-            options.interpretedSyntax = .inlineOnlyPreservingWhitespace
-            return options
-        }()
-        if var attributed = try? AttributedString(markdown: raw, options: markdownOptions) {
-            attributed.font = base
-            attributed.foregroundColor = color
-            return Text(attributed)
+    /// Plain text with Markdown emphasis markers removed (for list labels, etc.).
+    func plainPreviewLabel(for locale: String?) -> String {
+        let raw = resolvedText(for: locale) ?? "Text"
+        guard textUsesMarkdown else { return raw }
+        return Self.stripInlineMarkdownMarkers(raw)
+    }
+
+    /// Private sentinels so non-CommonMark delimiters survive Markdown parsing without showing on canvas.
+    private static let underlineOpen = "\u{FFF0}"
+    private static let underlineClose = "\u{FFF1}"
+    private static let strikeOpen = "\u{FFF2}"
+    private static let strikeClose = "\u{FFF3}"
+
+    /// Converts `~~strike~~` / `++underline++` into sentinel-wrapped text for Markdown parsing.
+    static func encodeCustomInlineMarkers(in text: String) -> String {
+        var result = encodeDelimited(
+            text,
+            pattern: #"~~(.+?)~~"#,
+            open: strikeOpen,
+            close: strikeClose
+        )
+        result = encodeDelimited(
+            result,
+            pattern: #"\+\+(.+?)\+\+"#,
+            open: underlineOpen,
+            close: underlineClose
+        )
+        return result
+    }
+
+    /// - Note: Kept for call sites that only need underline encoding.
+    static func encodeUnderlineMarkers(in text: String) -> String {
+        encodeCustomInlineMarkers(in: text)
+    }
+
+    private static func encodeDelimited(
+        _ text: String,
+        pattern: String,
+        open: String,
+        close: String
+    ) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return text }
+        let full = NSRange(location: 0, length: (text as NSString).length)
+        return regex.stringByReplacingMatches(
+            in: text,
+            options: [],
+            range: full,
+            withTemplate: "\(open)$1\(close)"
+        )
+    }
+
+    static func applyAndStripCustomSentinels(in attributed: NSMutableAttributedString, color: NSColor) {
+        applyAndStripSentinelPair(
+            in: attributed,
+            open: strikeOpen,
+            close: strikeClose,
+            attributes: [
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                .strikethroughColor: color
+            ]
+        )
+        applyAndStripSentinelPair(
+            in: attributed,
+            open: underlineOpen,
+            close: underlineClose,
+            attributes: [
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .underlineColor: color
+            ]
+        )
+    }
+
+    static func applyAndStripUnderlineSentinels(
+        in attributed: NSMutableAttributedString,
+        underlineColor: NSColor
+    ) {
+        applyAndStripCustomSentinels(in: attributed, color: underlineColor)
+    }
+
+    private static func applyAndStripSentinelPair(
+        in attributed: NSMutableAttributedString,
+        open: String,
+        close: String,
+        attributes: [NSAttributedString.Key: Any]
+    ) {
+        while true {
+            let ns = attributed.string as NSString
+            let openRange = ns.range(of: open)
+            guard openRange.location != NSNotFound else { break }
+            let searchFrom = openRange.location + openRange.length
+            let closeSearch = NSRange(location: searchFrom, length: ns.length - searchFrom)
+            let closeRange = ns.range(of: close, options: [], range: closeSearch)
+            guard closeRange.location != NSNotFound else {
+                attributed.replaceCharacters(in: openRange, with: "")
+                continue
+            }
+            let content = NSRange(
+                location: openRange.location + openRange.length,
+                length: closeRange.location - (openRange.location + openRange.length)
+            )
+            if content.length > 0 {
+                attributed.addAttributes(attributes, range: content)
+            }
+            attributed.replaceCharacters(in: closeRange, with: "")
+            attributed.replaceCharacters(in: openRange, with: "")
         }
-        return Text(raw)
-            .font(base)
-            .tracking(tracking * Double(scale))
-            .foregroundStyle(color)
+    }
+
+    static func stripInlineMarkdownMarkers(_ text: String) -> String {
+        var result = text
+        // Longer / more specific delimiters first.
+        let patterns = [
+            #"\+\+(.+?)\+\+"#,
+            #"~~(.+?)~~"#,
+            #"\*\*\*(.+?)\*\*\*"#,
+            #"\*\*(.+?)\*\*"#,
+            #"\*(.+?)\*"#,
+            #"`(.+?)`"#
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { continue }
+            let range = NSRange(result.startIndex..<result.endIndex, in: result)
+            result = regex.stringByReplacingMatches(
+                in: result,
+                options: [],
+                range: range,
+                withTemplate: "$1"
+            )
+        }
+        return result
     }
 
     /// Resolves the on-canvas size, honoring fit-to-content for text layers.

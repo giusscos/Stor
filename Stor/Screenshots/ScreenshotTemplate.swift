@@ -58,7 +58,8 @@ struct ScreenshotLayer: Codable, Identifiable {
     var textBackgroundHex: String?
     var textPaddingPt: Double
     var textCornerRadiusPt: Double
-    /// When true, `text` / translations are treated as Markdown (`**bold**`, `*italic*`).
+    /// When true, `text` / translations are treated as Markdown inline styles
+    /// (`**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `++underline++`).
     /// Per-run color is intentionally unsupported — not part of standard Markdown.
     var textUsesMarkdown: Bool
     /// When true, width hugs the measured text (plus padding) instead of `widthFraction`.
@@ -133,7 +134,7 @@ struct ScreenshotLayer: Codable, Identifiable {
         self.textBackgroundHex = nil
         self.textPaddingPt = 12
         self.textCornerRadiusPt = 20
-        self.textUsesMarkdown = false
+        self.textUsesMarkdown = true
         self.fitWidthToContent = false
         self.fitHeightToContent = false
         self.imageData = nil
@@ -182,7 +183,7 @@ struct ScreenshotLayer: Codable, Identifiable {
         textBackgroundHex = try c.decodeIfPresent(String.self, forKey: .textBackgroundHex)
         textPaddingPt = try c.decodeIfPresent(Double.self, forKey: .textPaddingPt) ?? 12
         textCornerRadiusPt = try c.decodeIfPresent(Double.self, forKey: .textCornerRadiusPt) ?? 20
-        textUsesMarkdown = try c.decodeIfPresent(Bool.self, forKey: .textUsesMarkdown) ?? false
+        textUsesMarkdown = try c.decodeIfPresent(Bool.self, forKey: .textUsesMarkdown) ?? true
         fitWidthToContent = try c.decodeIfPresent(Bool.self, forKey: .fitWidthToContent) ?? false
         fitHeightToContent = try c.decodeIfPresent(Bool.self, forKey: .fitHeightToContent) ?? false
         imageData = try c.decodeIfPresent(Data.self, forKey: .imageData)
