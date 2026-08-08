@@ -54,6 +54,17 @@ struct ScreenshotLayer: Codable, Identifiable {
     var isItalic: Bool
     var tracking: Double
     var alignmentRaw: String
+    /// When non-nil, draws a rounded rect behind the text (layer frame = background bounds).
+    var textBackgroundHex: String?
+    var textPaddingPt: Double
+    var textCornerRadiusPt: Double
+    /// When true, `text` / translations are treated as Markdown (`**bold**`, `*italic*`).
+    /// Per-run color is intentionally unsupported — not part of standard Markdown.
+    var textUsesMarkdown: Bool
+    /// When true, width hugs the measured text (plus padding) instead of `widthFraction`.
+    var fitWidthToContent: Bool
+    /// When true, height hugs the measured text (plus padding) instead of `heightFraction`.
+    var fitHeightToContent: Bool
 
     // Image
     var imageData: Data?
@@ -119,12 +130,31 @@ struct ScreenshotLayer: Codable, Identifiable {
         self.isItalic = false
         self.tracking = 0
         self.alignmentRaw = LayerTextAlignment.center.rawValue
+        self.textBackgroundHex = nil
+        self.textPaddingPt = 12
+        self.textCornerRadiusPt = 20
+        self.textUsesMarkdown = false
+        self.fitWidthToContent = false
+        self.fitHeightToContent = false
         self.imageData = nil
+    }
+
+    var hasTextBackground: Bool {
+        get { textBackgroundHex != nil }
+        set {
+            if newValue {
+                if textBackgroundHex == nil { textBackgroundHex = "#FFFFFF" }
+            } else {
+                textBackgroundHex = nil
+            }
+        }
     }
 
     enum CodingKeys: String, CodingKey {
         case id, type, xFraction, yFraction, widthFraction, heightFraction, isVisible
         case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
+        case textBackgroundHex, textPaddingPt, textCornerRadiusPt, textUsesMarkdown
+        case fitWidthToContent, fitHeightToContent
         case imageData
     }
 
@@ -149,6 +179,12 @@ struct ScreenshotLayer: Codable, Identifiable {
         tracking = try c.decodeIfPresent(Double.self, forKey: .tracking) ?? 0
         alignmentRaw = try c.decodeIfPresent(String.self, forKey: .alignmentRaw)
             ?? LayerTextAlignment.center.rawValue
+        textBackgroundHex = try c.decodeIfPresent(String.self, forKey: .textBackgroundHex)
+        textPaddingPt = try c.decodeIfPresent(Double.self, forKey: .textPaddingPt) ?? 12
+        textCornerRadiusPt = try c.decodeIfPresent(Double.self, forKey: .textCornerRadiusPt) ?? 20
+        textUsesMarkdown = try c.decodeIfPresent(Bool.self, forKey: .textUsesMarkdown) ?? false
+        fitWidthToContent = try c.decodeIfPresent(Bool.self, forKey: .fitWidthToContent) ?? false
+        fitHeightToContent = try c.decodeIfPresent(Bool.self, forKey: .fitHeightToContent) ?? false
         imageData = try c.decodeIfPresent(Data.self, forKey: .imageData)
     }
 }

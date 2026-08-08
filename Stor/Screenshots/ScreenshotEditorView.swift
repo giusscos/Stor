@@ -392,24 +392,28 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
     }
 
     for layer in template.layers where layer.isVisible {
+        let layerSize = layer.resolvedSize(in: size, locale: locale, fontScale: 1)
         let rect = CGRect(
             x: layer.xFraction * size.width,
-            y: (1 - layer.yFraction - layer.heightFraction) * size.height,
-            width: layer.widthFraction * size.width,
-            height: layer.heightFraction * size.height
+            y: (1 - layer.yFraction) * size.height - layerSize.height,
+            width: layerSize.width,
+            height: layerSize.height
         )
         switch layer.type {
         case .text:
-            if let text = layer.resolvedText(for: locale) {
-                let paragraph = NSMutableParagraphStyle()
-                paragraph.alignment = layer.textAlignment.nsTextAlignment
-                let attrs: [NSAttributedString.Key: Any] = [
-                    .font: layer.resolvedNSFont(size: layer.fontSizePt),
-                    .foregroundColor: NSColor(Color(hex: layer.colorHex)),
-                    .paragraphStyle: paragraph,
-                    .kern: layer.tracking
-                ]
-                NSString(string: text).draw(in: rect, withAttributes: attrs)
+            if let bgHex = layer.textBackgroundHex {
+                let path = NSBezierPath(
+                    roundedRect: rect,
+                    xRadius: layer.textCornerRadiusPt,
+                    yRadius: layer.textCornerRadiusPt
+                )
+                NSColor(Color(hex: bgHex)).setFill()
+                path.fill()
+            }
+            let pad = layer.textPaddingPt
+            let textRect = rect.insetBy(dx: pad, dy: pad)
+            if let attributed = layer.resolvedAttributedString(for: locale, fontSize: layer.fontSizePt) {
+                attributed.draw(in: textRect)
             }
         case .image:
             if let data = layer.imageData, let img = NSImage(data: data) {
@@ -846,23 +850,35 @@ private struct ScreenshotCanvas: View {
 
     @ViewBuilder
     private func layerView(_ layer: ScreenshotLayer, in size: CGSize) -> some View {
-        let x = layer.xFraction * size.width
-        let y = layer.yFraction * size.height
-        let w = layer.widthFraction * size.width
-        let h = layer.heightFraction * size.height
+        let scale = size.width / 375
+        let frame = layer.resolvedFrame(in: size, locale: previewLocale, fontScale: scale)
+        let w = frame.width
+        let h = frame.height
+        let x = frame.minX
+        let y = frame.minY
 
         switch layer.type {
         case .text:
-            Text(layer.resolvedText(for: previewLocale) ?? "")
-                .font(layer.resolvedSwiftUIFont(size: layer.fontSizePt * size.width / 375))
-                .tracking(layer.tracking * size.width / 375)
-                .foregroundStyle(Color(hex: layer.colorHex))
-                .multilineTextAlignment(
-                    layer.textAlignment == .leading ? .leading :
-                        layer.textAlignment == .trailing ? .trailing : .center
-                )
-                .frame(width: w, height: h, alignment: layer.textAlignment.swiftUI)
-                .position(x: x + w / 2, y: y + h / 2)
+            let pad = layer.textPaddingPt * scale
+            let radius = layer.textCornerRadiusPt * scale
+            layer.resolvedPreviewText(
+                for: previewLocale,
+                fontSize: layer.fontSizePt * scale,
+                scale: scale
+            )
+            .multilineTextAlignment(
+                layer.textAlignment == .leading ? .leading :
+                    layer.textAlignment == .trailing ? .trailing : .center
+            )
+            .padding(pad)
+            .frame(width: w, height: h, alignment: layer.textAlignment.swiftUI)
+            .background {
+                if let bgHex = layer.textBackgroundHex {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .fill(Color(hex: bgHex))
+                }
+            }
+            .position(x: x + w / 2, y: y + h / 2)
 
         case .image:
             if let data = layer.imageData, let img = NSImage(data: data) {
@@ -1547,6 +1563,25 @@ private struct LayerPropertiesView: View {
                             ), axis: .vertical)
                             .lineLimit(2...4)
                             .textFieldStyle(.roundedBorder)
+
+                            Toggle("Markdown", isOn: $layer.textUsesMarkdown)
+                            if layer.textUsesMarkdown {
+                                Text("Standard Markdown only: **bold**, *italic*. Color stays layer-wide (inline color isn’t in Markdown).")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                HStack(spacing: 8) {
+                                    Button("Bold") {
+                                        wrapMarkdown("**")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    Button("Italic") {
+                                        wrapMarkdown("*")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+                            }
                         }
 
                         InspectorLabeledRow("Font") {
@@ -1619,18 +1654,94 @@ private struct LayerPropertiesView: View {
                         }
                     }
                 }
+
+                InspectorSection(title: "Background") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Fill", isOn: Binding(
+                            get: { layer.hasTextBackground },
+                            set: { layer.hasTextBackground = $0 }
+                        ))
+
+                        if layer.hasTextBackground {
+                            InspectorLabeledRow("Color") {
+                                ColorPicker("", selection: Binding(
+                                    get: { Color(hex: layer.textBackgroundHex ?? "#FFFFFF") },
+                                    set: { layer.textBackgroundHex = $0.toHex() }
+                                ))
+                                .labelsHidden()
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+
+                            InspectorLabeledRow("Padding") {
+                                Slider(value: $layer.textPaddingPt, in: 0...64, step: 1)
+                                Text("\(Int(layer.textPaddingPt))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, alignment: .trailing)
+                            }
+
+                            InspectorLabeledRow("Radius") {
+                                Slider(value: $layer.textCornerRadiusPt, in: 0...120, step: 1)
+                                Text("\(Int(layer.textCornerRadiusPt))")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 28, alignment: .trailing)
+                            }
+
+                            Button("Make Capsule") {
+                                layer.textCornerRadiusPt = 120
+                                if layer.textPaddingPt < 8 {
+                                    layer.textPaddingPt = 12
+                                }
+                                if !layer.hasTextBackground {
+                                    layer.hasTextBackground = true
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
             }
 
             InspectorSection(title: "Layout") {
                 VStack(alignment: .leading, spacing: 10) {
                     layoutSlider("X", value: $layer.xFraction, range: 0...0.9)
                     layoutSlider("Y", value: $layer.yFraction, range: 0...0.9)
-                    layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.0)
-                    layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.0)
+
+                    if layer.type == .text {
+                        layoutFitSlider(
+                            "Width",
+                            value: $layer.widthFraction,
+                            range: 0.05...1.0,
+                            fit: $layer.fitWidthToContent
+                        )
+                        layoutFitSlider(
+                            "Height",
+                            value: $layer.heightFraction,
+                            range: 0.02...1.0,
+                            fit: $layer.fitHeightToContent
+                        )
+                    } else {
+                        layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.0)
+                        layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.0)
+                    }
+
                     Toggle("Visible", isOn: $layer.isVisible)
                 }
             }
         }
+    }
+
+    private func wrapMarkdown(_ marker: String) {
+        let current = layer.resolvedText(for: previewLocale) ?? ""
+        let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wrapped: String
+        if trimmed.hasPrefix(marker), trimmed.hasSuffix(marker), trimmed.count >= marker.count * 2 {
+            wrapped = String(trimmed.dropFirst(marker.count).dropLast(marker.count))
+        } else {
+            wrapped = "\(marker)\(trimmed)\(marker)"
+        }
+        layer.setResolvedText(wrapped, for: previewLocale, primaryLocale: primaryLocale)
     }
 
     private func layoutSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
@@ -1640,6 +1751,33 @@ private struct LayerPropertiesView: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .frame(width: 36, alignment: .trailing)
+        }
+    }
+
+    private func layoutFitSlider(
+        _ title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        fit: Binding<Bool>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            InspectorLabeledRow(title) {
+                if fit.wrappedValue {
+                    Text("Fit")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                } else {
+                    Slider(value: value, in: range)
+                    Text(String(format: "%.0f%%", value.wrappedValue * 100))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 36, alignment: .trailing)
+                }
+            }
+            Toggle("Fit to content", isOn: fit)
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
         }
     }
 

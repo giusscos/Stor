@@ -4,6 +4,9 @@
 - ASC auth, metadata sync/edit/push, snapshot diff
 - Keyword popularity (Search Ads), keyword ranking (iTunes Search API)
 - Screenshot canvas with drag-to-reposition layers, PNG export, ASC screenshot upload
+- Text layer capsule chrome (background fill, padding, corner radius)
+- Markdown inline formatting (`**bold**`, `*italic*` only — no per-run color)
+- Fit-to-content width/height for text layers
 
 ---
 
@@ -15,6 +18,11 @@ Text layers currently have a single `text` string. To support translated screens
 - Add a locale selector in the properties panel when a text layer is selected
 - Export per-locale: render the canvas once per locale substituting text
 - Use the same locale codes already present in `LocalizedMetadata`
+
+### 1b. Rich text (decided)
+Stay on **standard Markdown** for locale round-trip. Supported inline: `**bold**`, `*italic*`.
+Excluded (not Markdown-native): per-run color, custom fonts per word.
+Layer-level color / weight / background remain outside the Markdown body.
 
 ### 2. Competitor keyword discovery (Medium priority)
 Extend the Keywords tab with a "Discover" mode:

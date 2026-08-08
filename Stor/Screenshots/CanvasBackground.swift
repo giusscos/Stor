@@ -516,6 +516,145 @@ extension ScreenshotLayer {
         }
         return font
     }
+
+    /// Builds an attributed string for canvas preview / export, applying layer style
+    /// and optional Markdown (`**bold**`, `*italic*`) when `textUsesMarkdown` is on.
+    func resolvedAttributedString(
+        for locale: String?,
+        fontSize: CGFloat,
+        scale: CGFloat = 1
+    ) -> NSAttributedString? {
+        guard let raw = resolvedText(for: locale) else { return nil }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = textAlignment.nsTextAlignment
+
+        let baseFont = resolvedNSFont(size: fontSize)
+        let baseColor = NSColor(Color(hex: colorHex))
+        let kern = tracking * Double(scale)
+
+        let baseAttrs: [NSAttributedString.Key: Any] = [
+            .font: baseFont,
+            .foregroundColor: baseColor,
+            .paragraphStyle: paragraph,
+            .kern: kern
+        ]
+
+        guard textUsesMarkdown else {
+            return NSAttributedString(string: raw, attributes: baseAttrs)
+        }
+
+        let markdownOptions: AttributedString.MarkdownParsingOptions = {
+            var options = AttributedString.MarkdownParsingOptions()
+            options.interpretedSyntax = .inlineOnlyPreservingWhitespace
+            return options
+        }()
+        guard let markdown = try? AttributedString(markdown: raw, options: markdownOptions) else {
+            return NSAttributedString(string: raw, attributes: baseAttrs)
+        }
+
+        let result = NSMutableAttributedString()
+        for run in markdown.runs {
+            let substring = String(markdown[run.range].characters)
+            var attrs = baseAttrs
+            let intent = run.inlinePresentationIntent
+            let wantsBold = intent?.contains(.stronglyEmphasized) == true
+            let wantsItalic = intent?.contains(.emphasized) == true
+            if wantsBold || wantsItalic {
+                var traits: NSFontTraitMask = []
+                if wantsBold { traits.insert(.boldFontMask) }
+                if wantsItalic { traits.insert(.italicFontMask) }
+                attrs[.font] = NSFontManager.shared.convert(baseFont, toHaveTrait: traits)
+            }
+            result.append(NSAttributedString(string: substring, attributes: attrs))
+        }
+        return result
+    }
+
+    /// SwiftUI text for canvas preview (plain or Markdown).
+    func resolvedPreviewText(for locale: String?, fontSize: CGFloat, scale: CGFloat) -> Text {
+        let raw = resolvedText(for: locale) ?? ""
+        let base = resolvedSwiftUIFont(size: fontSize)
+        let color = Color(hex: colorHex)
+
+        guard textUsesMarkdown else {
+            return Text(raw)
+                .font(base)
+                .tracking(tracking * Double(scale))
+                .foregroundStyle(color)
+        }
+
+        let markdownOptions: AttributedString.MarkdownParsingOptions = {
+            var options = AttributedString.MarkdownParsingOptions()
+            options.interpretedSyntax = .inlineOnlyPreservingWhitespace
+            return options
+        }()
+        if var attributed = try? AttributedString(markdown: raw, options: markdownOptions) {
+            attributed.font = base
+            attributed.foregroundColor = color
+            return Text(attributed)
+        }
+        return Text(raw)
+            .font(base)
+            .tracking(tracking * Double(scale))
+            .foregroundStyle(color)
+    }
+
+    /// Resolves the on-canvas size, honoring fit-to-content for text layers.
+    /// - Parameter fontScale: `1` for export at device size; `canvasWidth / 375` for preview.
+    func resolvedSize(in canvasSize: CGSize, locale: String?, fontScale: CGFloat) -> CGSize {
+        let fixedWidth = widthFraction * canvasSize.width
+        let fixedHeight = heightFraction * canvasSize.height
+
+        guard type == .text, fitWidthToContent || fitHeightToContent else {
+            return CGSize(width: fixedWidth, height: fixedHeight)
+        }
+
+        let fontSize = fontSizePt * fontScale
+        let pad = textPaddingPt * fontScale
+        let maxTextWidth: CGFloat = {
+            if fitWidthToContent {
+                return max(1, canvasSize.width - pad * 2)
+            }
+            return max(1, fixedWidth - pad * 2)
+        }()
+
+        guard let attributed = resolvedAttributedString(
+            for: locale,
+            fontSize: fontSize,
+            scale: fontScale
+        ) else {
+            return CGSize(width: fixedWidth, height: fixedHeight)
+        }
+
+        let textBounds = attributed.boundingRect(
+            with: CGSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading]
+        )
+        // Add a little slack so glyphs aren't clipped at the edges.
+        let contentWidth = ceil(textBounds.width) + 2
+        let contentHeight = ceil(textBounds.height) + 2
+
+        let width = fitWidthToContent
+            ? min(canvasSize.width, contentWidth + pad * 2)
+            : fixedWidth
+        let height = fitHeightToContent
+            ? min(canvasSize.height, contentHeight + pad * 2)
+            : fixedHeight
+
+        return CGSize(width: max(1, width), height: max(1, height))
+    }
+
+    /// Top-left origin frame in canvas coordinates (SwiftUI / preview space).
+    func resolvedFrame(in canvasSize: CGSize, locale: String?, fontScale: CGFloat) -> CGRect {
+        let size = resolvedSize(in: canvasSize, locale: locale, fontScale: fontScale)
+        return CGRect(
+            x: xFraction * canvasSize.width,
+            y: yFraction * canvasSize.height,
+            width: size.width,
+            height: size.height
+        )
+    }
 }
 
 private extension Font {
