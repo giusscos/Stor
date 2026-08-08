@@ -12,8 +12,10 @@ struct ScreenshotEditorView: View {
     @State private var selectedTemplate: ScreenshotTemplate?
     @State private var showNewTemplate = false
     @State private var showUploadSheet = false
-    @State private var uploadPNGData: Data?
     @State private var viewMode: ScreenshotsViewMode = .editor
+    @State private var previewLocale: String = ""
+    @State private var importMessage: String?
+    @State private var importSucceeded = false
 
     private enum ScreenshotsViewMode: String, CaseIterable {
         case editor
@@ -38,6 +40,21 @@ struct ScreenshotEditorView: View {
         app.screenshotTemplates.sorted { $0.createdAt < $1.createdAt }
     }
 
+    private var availableLocales: [String] {
+        if let snapshot = app.snapshots.sorted(by: { $0.capturedAt > $1.capturedAt }).first {
+            let locales = snapshot.localizations.map(\.locale).sorted()
+            if !locales.isEmpty { return locales }
+        }
+        return [app.primaryLocale].filter { !$0.isEmpty }
+    }
+
+    private var activeLocale: String {
+        if !previewLocale.isEmpty, availableLocales.contains(where: { $0.caseInsensitiveCompare(previewLocale) == .orderedSame }) {
+            return previewLocale
+        }
+        return availableLocales.first ?? app.primaryLocale
+    }
+
     var body: some View {
         HSplitView {
             templateListPanel
@@ -46,14 +63,22 @@ struct ScreenshotEditorView: View {
             switch viewMode {
             case .editor:
                 if let template = selectedTemplate {
-                    TemplateEditorView(template: template)
+                    TemplateEditorView(
+                        template: template,
+                        previewLocale: activeLocale,
+                        primaryLocale: app.primaryLocale,
+                        availableLocales: availableLocales,
+                        onLocaleChange: { previewLocale = $0 }
+                    )
+                    .id(template.persistentModelID)
                 } else {
                     emptyEditorState
                 }
             case .gallery:
                 ScreenshotGalleryView(
                     templates: templates,
-                    selectedTemplate: $selectedTemplate
+                    selectedTemplate: $selectedTemplate,
+                    previewLocale: activeLocale
                 ) {
                     viewMode = .editor
                 }
@@ -70,11 +95,40 @@ struct ScreenshotEditorView: View {
                 .help("Switch between editor and App Store gallery preview")
             }
 
+            if !availableLocales.isEmpty {
+                ToolbarItem {
+                    Picker("Locale", selection: Binding(
+                        get: { activeLocale },
+                        set: { previewLocale = $0 }
+                    )) {
+                        ForEach(availableLocales, id: \.self) { locale in
+                            Text(LocaleDisplayName.name(for: locale)).tag(locale)
+                        }
+                    }
+                    .frame(maxWidth: 200)
+                    .help("Preview and edit screenshot text for this locale")
+                }
+            }
+
             ToolbarItem {
                 Button { showNewTemplate = true } label: {
                     Label("New Template", systemImage: "plus")
                 }
                 .help("New screenshot template")
+            }
+
+            ToolbarItemGroup {
+                Button(action: importScreenshotTexts) {
+                    Label("Import Texts", systemImage: "square.and.arrow.down")
+                }
+                .disabled(templates.isEmpty)
+                .help("Import translated screenshot texts from Markdown")
+
+                Button(action: exportScreenshotTexts) {
+                    Label("Export Texts", systemImage: "doc.badge.arrow.up")
+                }
+                .disabled(templates.isEmpty)
+                .help("Export screenshot texts as Markdown for all locales")
             }
 
             if viewMode == .editor, let template = selectedTemplate {
@@ -86,12 +140,7 @@ struct ScreenshotEditorView: View {
                 }
 
                 ToolbarItem {
-                    Button {
-                        if let data = renderTemplate(template) {
-                            uploadPNGData = data
-                            showUploadSheet = true
-                        }
-                    } label: {
+                    Button { showUploadSheet = true } label: {
                         Label("Upload to ASC", systemImage: "icloud.and.arrow.up")
                     }
                     .help("Upload screenshot to App Store Connect")
@@ -112,9 +161,43 @@ struct ScreenshotEditorView: View {
             }
         }
         .sheet(isPresented: $showUploadSheet) {
-            if let tmpl = selectedTemplate, let data = uploadPNGData {
-                UploadScreenshotSheet(app: app, template: tmpl, pngData: data)
+            if let tmpl = selectedTemplate {
+                UploadScreenshotSheet(app: app, template: tmpl, initialLocale: activeLocale)
             }
+        }
+        .alert(
+            importSucceeded ? "Import Complete" : "Import",
+            isPresented: Binding(
+                get: { importMessage != nil },
+                set: { if !$0 { importMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { importMessage = nil }
+        } message: {
+            Text(importMessage ?? "")
+        }
+        .onAppear {
+            syncSelectionToCurrentApp()
+        }
+        .onChange(of: app.persistentModelID) { _, _ in
+            syncSelectionToCurrentApp(force: true)
+        }
+    }
+
+    /// Keeps canvas/inspector in sync with the template list for the current app.
+    private func syncSelectionToCurrentApp(force: Bool = false) {
+        if force {
+            selectedTemplate = templates.first
+            previewLocale = app.primaryLocale
+            return
+        }
+        if let selected = selectedTemplate,
+           templates.contains(where: { $0.persistentModelID == selected.persistentModelID }) {
+            return
+        }
+        selectedTemplate = templates.first
+        if previewLocale.isEmpty {
+            previewLocale = app.primaryLocale
         }
     }
 
@@ -197,9 +280,7 @@ struct ScreenshotEditorView: View {
         }
         .background(Color(nsColor: .controlBackgroundColor))
         .onAppear {
-            if selectedTemplate == nil {
-                selectedTemplate = templates.first
-            }
+            syncSelectionToCurrentApp()
         }
     }
 
@@ -211,87 +292,149 @@ struct ScreenshotEditorView: View {
     private func exportTemplate(_ template: ScreenshotTemplate) {
         let panel = NSSavePanel()
         panel.title = "Export Screenshot"
-        panel.nameFieldStringValue = "\(template.name).png"
+        panel.nameFieldStringValue = "\(template.name)-\(activeLocale).png"
         panel.allowedContentTypes = [.png]
         if panel.runModal() == .OK, let url = panel.url {
-            if let data = renderTemplate(template) {
+            if let data = renderTemplate(template, locale: activeLocale) {
                 try? data.write(to: url)
             }
         }
     }
 
-    @MainActor
-    private func renderTemplate(_ template: ScreenshotTemplate) -> Data? {
-        let size = template.deviceType.canvasSize
-        let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: Int(size.width),
-            pixelsHigh: Int(size.height),
-            bitsPerSample: 8,
-            samplesPerPixel: 4,
-            hasAlpha: true,
-            isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0,
-            bitsPerPixel: 0
+    private func exportScreenshotTexts() {
+        let markdown = ScreenshotMarkdownImporter.exportMarkdown(
+            templates: templates,
+            locales: availableLocales,
+            primaryLocale: app.primaryLocale
         )
-        guard let rep else { return nil }
+        let name = "\(app.name.isEmpty ? "app" : app.name)-screenshot-texts.md"
+            .replacingOccurrences(of: "/", with: "-")
+        _ = ScreenshotMarkdownImporter.presentSavePanel(defaultName: name, contents: markdown)
+    }
 
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-
-        if let bgImage = renderBackgroundImage(template.background, size: size) {
-            bgImage.draw(in: NSRect(origin: .zero, size: size))
-        } else {
-            NSColor(Color(hex: template.backgroundColorHex)).setFill()
-            NSRect(origin: .zero, size: size).fill()
+    private func importScreenshotTexts() {
+        guard !templates.isEmpty else {
+            importSucceeded = false
+            importMessage = "Create screenshot templates with text layers first."
+            return
         }
+        guard let urls = ScreenshotMarkdownImporter.presentOpenPanel(), !urls.isEmpty else { return }
 
-        for layer in template.layers where layer.isVisible {
-            let rect = CGRect(
-                x: layer.xFraction * size.width,
-                y: (1 - layer.yFraction - layer.heightFraction) * size.height,
-                width: layer.widthFraction * size.width,
-                height: layer.heightFraction * size.height
+        do {
+            var allBlocks: [ScreenshotMarkdownImporter.LocaleBlock] = []
+            for url in urls {
+                let didAccess = url.startAccessingSecurityScopedResource()
+                defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
+                allBlocks.append(contentsOf: try ScreenshotMarkdownImporter.parse(fileURL: url))
+            }
+
+            var merged: [String: ScreenshotMarkdownImporter.LocaleBlock] = [:]
+            for block in allBlocks {
+                merged[block.locale] = block
+            }
+
+            let result = ScreenshotMarkdownImporter.apply(
+                blocks: Array(merged.values),
+                to: templates,
+                primaryLocale: app.primaryLocale
             )
-            switch layer.type {
-            case .text:
-                if let text = layer.text {
-                    let paragraph = NSMutableParagraphStyle()
-                    paragraph.alignment = layer.textAlignment.nsTextAlignment
-                    let attrs: [NSAttributedString.Key: Any] = [
-                        .font: layer.resolvedNSFont(size: layer.fontSizePt),
-                        .foregroundColor: NSColor(Color(hex: layer.colorHex)),
-                        .paragraphStyle: paragraph,
-                        .kern: layer.tracking
-                    ]
-                    NSString(string: text).draw(in: rect, withAttributes: attrs)
-                }
-            case .image:
-                if let data = layer.imageData, let img = NSImage(data: data) {
-                    img.draw(in: rect)
-                }
+            importSucceeded = result.updatedLayerCount > 0
+
+            var lines: [String] = []
+            if result.updatedLayerCount > 0 {
+                lines.append(
+                    "Updated \(result.updatedLayerCount) text layer(s) across \(result.updatedLocales.count) locale(s): \(result.updatedLocales.joined(separator: ", "))."
+                )
+            }
+            if !result.unknownLayerIds.isEmpty {
+                lines.append(
+                    "Skipped \(result.unknownLayerIds.count) unknown layer id(s). Re-export after editing templates so UUIDs stay in sync."
+                )
+            }
+            if result.updatedLayerCount == 0 && result.unknownLayerIds.isEmpty {
+                lines.append("No texts were updated. Check that each ### layer UUID has content underneath.")
+            }
+            importMessage = lines.joined(separator: "\n")
+        } catch {
+            importSucceeded = false
+            importMessage = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Render helpers
+
+@MainActor
+func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Data? {
+    let size = template.deviceType.canvasSize
+    let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: Int(size.width),
+        pixelsHigh: Int(size.height),
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+    )
+    guard let rep else { return nil }
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+
+    if let bgImage = renderBackgroundImage(template.background, size: size) {
+        bgImage.draw(in: NSRect(origin: .zero, size: size))
+    } else {
+        NSColor(Color(hex: template.backgroundColorHex)).setFill()
+        NSRect(origin: .zero, size: size).fill()
+    }
+
+    for layer in template.layers where layer.isVisible {
+        let rect = CGRect(
+            x: layer.xFraction * size.width,
+            y: (1 - layer.yFraction - layer.heightFraction) * size.height,
+            width: layer.widthFraction * size.width,
+            height: layer.heightFraction * size.height
+        )
+        switch layer.type {
+        case .text:
+            if let text = layer.resolvedText(for: locale) {
+                let paragraph = NSMutableParagraphStyle()
+                paragraph.alignment = layer.textAlignment.nsTextAlignment
+                let attrs: [NSAttributedString.Key: Any] = [
+                    .font: layer.resolvedNSFont(size: layer.fontSizePt),
+                    .foregroundColor: NSColor(Color(hex: layer.colorHex)),
+                    .paragraphStyle: paragraph,
+                    .kern: layer.tracking
+                ]
+                NSString(string: text).draw(in: rect, withAttributes: attrs)
+            }
+        case .image:
+            if let data = layer.imageData, let img = NSImage(data: data) {
+                img.draw(in: rect)
             }
         }
-
-        NSGraphicsContext.restoreGraphicsState()
-
-        let image = NSImage(size: NSSize(width: size.width, height: size.height))
-        image.addRepresentation(rep)
-        guard let tiff = image.tiffRepresentation,
-              let pngRep = NSBitmapImageRep(data: tiff) else { return nil }
-        return pngRep.representation(using: .png, properties: [:])
     }
 
-    @MainActor
-    private func renderBackgroundImage(_ background: CanvasBackground, size: CGSize) -> NSImage? {
-        let view = CanvasBackgroundFill(background: background)
-            .frame(width: size.width, height: size.height)
-        let renderer = ImageRenderer(content: view)
-        renderer.proposedSize = ProposedViewSize(width: size.width, height: size.height)
-        renderer.scale = 1
-        return renderer.nsImage
-    }
+    NSGraphicsContext.restoreGraphicsState()
+
+    let image = NSImage(size: NSSize(width: size.width, height: size.height))
+    image.addRepresentation(rep)
+    guard let tiff = image.tiffRepresentation,
+          let pngRep = NSBitmapImageRep(data: tiff) else { return nil }
+    return pngRep.representation(using: .png, properties: [:])
+}
+
+@MainActor
+private func renderBackgroundImage(_ background: CanvasBackground, size: CGSize) -> NSImage? {
+    let view = CanvasBackgroundFill(background: background)
+        .frame(width: size.width, height: size.height)
+    let renderer = ImageRenderer(content: view)
+    renderer.proposedSize = ProposedViewSize(width: size.width, height: size.height)
+    renderer.scale = 1
+    return renderer.nsImage
 }
 
 // MARK: - Template sidebar row
@@ -373,6 +516,11 @@ private struct TemplateSidebarRow: View {
 
 private struct TemplateEditorView: View {
     @Bindable var template: ScreenshotTemplate
+    var previewLocale: String
+    var primaryLocale: String
+    var availableLocales: [String]
+    var onLocaleChange: (String) -> Void
+
     @State private var selectedLayerId: UUID?
     @State private var showAddImage = false
     @State private var canvasZoom: CGFloat = 1.0
@@ -416,6 +564,17 @@ private struct TemplateEditorView: View {
                 addImageLayer(data: data)
             }
         }
+        .onAppear {
+            // Defer until the AppKit viewport has a non-zero frame.
+            DispatchQueue.main.async {
+                centerRequest += 1
+            }
+        }
+        .onChange(of: template.persistentModelID) { _, _ in
+            DispatchQueue.main.async {
+                resetCanvasView()
+            }
+        }
     }
 
     // MARK: Canvas
@@ -428,7 +587,11 @@ private struct TemplateEditorView: View {
                 maxMagnification: maxZoom,
                 centerRequest: centerRequest
             ) {
-                ScreenshotCanvas(template: template, selectedLayerId: $selectedLayerId)
+                ScreenshotCanvas(
+                    template: template,
+                    selectedLayerId: $selectedLayerId,
+                    previewLocale: previewLocale
+                )
                     .frame(
                         width: canvasBaseWidth,
                         height: canvasBaseWidth / template.deviceType.aspectRatio
@@ -562,6 +725,7 @@ private struct TemplateEditorView: View {
                                 ForEach(template.layers) { layer in
                                     LayerListRow(
                                         layer: layer,
+                                        previewLocale: previewLocale,
                                         isSelected: layer.id == selectedLayerId
                                     ) {
                                         selectedLayerId = layer.id
@@ -591,7 +755,13 @@ private struct TemplateEditorView: View {
                     }
 
                     if let binding = selectedLayer {
-                        LayerPropertiesView(layer: binding)
+                        LayerPropertiesView(
+                            layer: binding,
+                            previewLocale: previewLocale,
+                            primaryLocale: primaryLocale,
+                            availableLocales: availableLocales,
+                            onLocaleChange: onLocaleChange
+                        )
                     }
                 }
                 .padding(.horizontal, 12)
@@ -623,6 +793,7 @@ private struct TemplateEditorView: View {
 private struct ScreenshotCanvas: View {
     let template: ScreenshotTemplate
     @Binding var selectedLayerId: UUID?
+    var previewLocale: String? = nil
     var isInteractive: Bool = true
     @State private var dragStart: [UUID: CGPoint] = [:]
 
@@ -682,7 +853,7 @@ private struct ScreenshotCanvas: View {
 
         switch layer.type {
         case .text:
-            Text(layer.text ?? "")
+            Text(layer.resolvedText(for: previewLocale) ?? "")
                 .font(layer.resolvedSwiftUIFont(size: layer.fontSizePt * size.width / 375))
                 .tracking(layer.tracking * size.width / 375)
                 .foregroundStyle(Color(hex: layer.colorHex))
@@ -710,6 +881,7 @@ private struct ScreenshotCanvas: View {
 private struct ScreenshotGalleryView: View {
     let templates: [ScreenshotTemplate]
     @Binding var selectedTemplate: ScreenshotTemplate?
+    var previewLocale: String
     var onOpenEditor: () -> Void
 
     private struct DeviceGroup: Identifiable {
@@ -812,6 +984,7 @@ private struct ScreenshotGalleryView: View {
                 ScreenshotCanvas(
                     template: template,
                     selectedLayerId: .constant(nil),
+                    previewLocale: previewLocale,
                     isInteractive: false
                 )
                 .frame(width: cardWidth, height: cardHeight)
@@ -1300,6 +1473,7 @@ private struct MeshPointCanvas: View {
 
 private struct LayerListRow: View {
     let layer: ScreenshotLayer
+    var previewLocale: String
     let isSelected: Bool
     let onSelect: () -> Void
     let onDelete: () -> Void
@@ -1310,7 +1484,7 @@ private struct LayerListRow: View {
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 16)
 
-            Text(layer.type == .text ? (layer.text ?? "Text") : "Image")
+            Text(layer.type == .text ? (layer.resolvedText(for: previewLocale) ?? "Text") : "Image")
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1335,6 +1509,10 @@ private struct LayerListRow: View {
 
 private struct LayerPropertiesView: View {
     @Binding var layer: ScreenshotLayer
+    var previewLocale: String
+    var primaryLocale: String
+    var availableLocales: [String]
+    var onLocaleChange: (String) -> Void
 
     private var fontFamilies: [String] { ScreenshotFontFamily.allFamilies }
 
@@ -1343,13 +1521,29 @@ private struct LayerPropertiesView: View {
             if layer.type == .text {
                 InspectorSection(title: "Text") {
                     VStack(alignment: .leading, spacing: 12) {
+                        if !availableLocales.isEmpty {
+                            InspectorLabeledRow("Locale") {
+                                Picker("", selection: Binding(
+                                    get: { previewLocale },
+                                    set: { onLocaleChange($0) }
+                                )) {
+                                    ForEach(availableLocales, id: \.self) { locale in
+                                        Text(LocaleDisplayName.name(for: locale)).tag(locale)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                        }
+
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Content")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                             TextField("Text", text: Binding(
-                                get: { layer.text ?? "" },
-                                set: { layer.text = $0 }
+                                get: { layer.resolvedText(for: previewLocale) ?? "" },
+                                set: { layer.setResolvedText($0, for: previewLocale, primaryLocale: primaryLocale) }
                             ), axis: .vertical)
                             .lineLimit(2...4)
                             .textFieldStyle(.roundedBorder)
@@ -1541,7 +1735,7 @@ private func nextScreenshotName(existing names: [String]) -> String {
 private struct UploadScreenshotSheet: View {
     let app: AppRecord
     let template: ScreenshotTemplate
-    let pngData: Data
+    var initialLocale: String
 
     @Environment(\.dismiss) private var dismiss
     @State private var selectedLocalizationId = ""
@@ -1559,14 +1753,17 @@ private struct UploadScreenshotSheet: View {
             .sorted { $0.locale < $1.locale }
     }
 
+    private var selectedLocale: String {
+        availableLocalizations.first { $0.id == selectedLocalizationId }?.locale ?? initialLocale
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("Screenshot") {
                     LabeledContent("Device", value: template.deviceType.rawValue)
                     LabeledContent("Display type", value: template.deviceType.ascDisplayType)
-                    LabeledContent("File size", value: ByteCountFormatter.string(
-                        fromByteCount: Int64(pngData.count), countStyle: .file))
+                    LabeledContent("Locale text", value: LocaleDisplayName.name(for: selectedLocale))
                 }
 
                 Section("Target localization") {
@@ -1616,13 +1813,23 @@ private struct UploadScreenshotSheet: View {
         }
         .frame(minWidth: 420, minHeight: 340)
         .onAppear {
-            selectedLocalizationId = availableLocalizations.first?.id ?? ""
+            if let match = availableLocalizations.first(where: {
+                $0.locale.caseInsensitiveCompare(initialLocale) == .orderedSame
+            }) {
+                selectedLocalizationId = match.id
+            } else {
+                selectedLocalizationId = availableLocalizations.first?.id ?? ""
+            }
         }
     }
 
     private func performUpload() {
         guard let credentials = try? KeychainService.shared.load() else {
             uploadError = "No ASC credentials found. Re-connect in Settings."
+            return
+        }
+        guard let pngData = renderTemplate(template, locale: selectedLocale) else {
+            uploadError = "Could not render screenshot for \(selectedLocale)."
             return
         }
         isUploading = true
@@ -1636,7 +1843,7 @@ private struct UploadScreenshotSheet: View {
                     .joined(separator: "_")
                 try await client.uploadScreenshot(
                     data: pngData,
-                    fileName: "\(safeName).png",
+                    fileName: "\(safeName)-\(selectedLocale).png",
                     versionLocalizationId: selectedLocalizationId,
                     screenshotDisplayType: template.deviceType.ascDisplayType
                 )

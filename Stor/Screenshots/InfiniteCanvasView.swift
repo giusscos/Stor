@@ -113,6 +113,10 @@ final class CanvasViewportView: NSView {
     private weak var contentView: NSView?
     private var contentSize: CGSize = .zero
 
+    /// Centers once the viewport and content both have real sizes (first layout).
+    private var needsInitialCenter = true
+    private var lastLayoutBounds: CGRect = .zero
+
     private var spaceDown = false
     private var isPanning = false
     private var panStartLocation: CGPoint = .zero
@@ -146,6 +150,7 @@ final class CanvasViewportView: NSView {
         clipsToBounds = true
 
         contentContainer.wantsLayer = true
+        contentContainer.layerContentsRedrawPolicy = .onSetNeedsDisplay
         addSubview(contentContainer)
 
         // Key monitors: Space = temporary hand tool (Figma).
@@ -192,8 +197,9 @@ final class CanvasViewportView: NSView {
         contentView?.removeFromSuperview()
         contentView = view
         contentContainer.addSubview(view)
+        needsInitialCenter = true
         invalidateContentSize()
-        centerContent()
+        centerContentIfPossible()
     }
 
     func invalidateContentSize() {
@@ -205,15 +211,31 @@ final class CanvasViewportView: NSView {
         if size.width < 1 || size.height < 1 {
             size = contentView.frame.size
         }
+        // Prefer explicit SwiftUI frame when hosting view already has one.
+        if size.width < 1 || size.height < 1, contentView.bounds.width > 1, contentView.bounds.height > 1 {
+            size = contentView.bounds.size
+        }
         guard size.width > 0, size.height > 0 else { return }
+
+        let sizeChanged = abs(contentSize.width - size.width) > 0.5
+            || abs(contentSize.height - size.height) > 0.5
         contentSize = size
         contentView.frame = CGRect(origin: .zero, size: size)
-        applyTransform()
+
+        if sizeChanged {
+            applyTransform()
+            centerContentIfPossible()
+        } else {
+            applyTransform()
+        }
     }
 
     func centerContent() {
         translation = .zero
         applyTransform()
+        if canCenter {
+            needsInitialCenter = false
+        }
     }
 
     /// Zoom while keeping the screenshot centered in the viewport.
@@ -221,31 +243,63 @@ final class CanvasViewportView: NSView {
         magnification = clamped(value)
         translation = .zero
         applyTransform()
+        if canCenter {
+            needsInitialCenter = false
+        }
     }
 
     override func layout() {
         super.layout()
-        applyTransform()
+
+        let boundsChanged = abs(lastLayoutBounds.width - bounds.width) > 0.5
+            || abs(lastLayoutBounds.height - bounds.height) > 0.5
+            || abs(lastLayoutBounds.origin.x - bounds.origin.x) > 0.5
+            || abs(lastLayoutBounds.origin.y - bounds.origin.y) > 0.5
+        lastLayoutBounds = bounds
+
+        // Re-measure after layout — NSHostingView often reports a real size only then.
+        invalidateContentSize()
+
+        if needsInitialCenter || (boundsChanged && translation == .zero) {
+            centerContentIfPossible()
+        } else {
+            applyTransform()
+        }
+    }
+
+    private var canCenter: Bool {
+        bounds.width > 1 && bounds.height > 1 && contentSize.width > 0 && contentSize.height > 0
+    }
+
+    private func centerContentIfPossible() {
+        guard canCenter else { return }
+        centerContent()
     }
 
     private func applyTransform() {
         guard contentSize.width > 0, contentSize.height > 0 else { return }
+        guard bounds.width > 0, bounds.height > 0 else { return }
 
-        contentContainer.frame = CGRect(origin: .zero, size: contentSize)
-        contentContainer.wantsLayer = true
+        // Frame-based centering avoids fighting AppKit's layer↔view sync on flipped views.
+        // Scale around the content center via layer transform; position via view frame mid-point.
+        let origin = CGPoint(
+            x: bounds.midX - contentSize.width / 2 + translation.x,
+            y: bounds.midY - contentSize.height / 2 + translation.y
+        )
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
 
-        contentContainer.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-        contentContainer.layer?.bounds = CGRect(origin: .zero, size: contentSize)
-        contentContainer.layer?.position = CGPoint(
-            x: bounds.midX + translation.x,
-            y: bounds.midY + translation.y
-        )
-        contentContainer.layer?.setAffineTransform(
-            CGAffineTransform(scaleX: magnification, y: magnification)
-        )
+        contentContainer.frame = CGRect(origin: origin, size: contentSize)
+        contentView?.frame = CGRect(origin: .zero, size: contentSize)
+
+        if let layer = contentContainer.layer {
+            layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            // Keep layer position matched to the view's frame center after anchor change.
+            layer.position = CGPoint(x: origin.x + contentSize.width / 2, y: origin.y + contentSize.height / 2)
+            layer.bounds = CGRect(origin: .zero, size: contentSize)
+            layer.setAffineTransform(CGAffineTransform(scaleX: magnification, y: magnification))
+        }
 
         CATransaction.commit()
     }

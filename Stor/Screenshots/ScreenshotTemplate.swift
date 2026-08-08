@@ -43,8 +43,9 @@ struct ScreenshotLayer: Codable, Identifiable {
     var heightFraction: Double
     var isVisible: Bool
 
-    // Text
+    // Text — `text` is the primary/default string; `translations` holds per-locale overrides.
     var text: String?
+    var translations: [String: String]
     var fontSizePt: Double
     var colorHex: String
     var isBold: Bool
@@ -71,6 +72,35 @@ struct ScreenshotLayer: Codable, Identifiable {
         set { alignmentRaw = newValue.rawValue }
     }
 
+    /// Text for a locale, falling back to the primary `text` string.
+    func resolvedText(for locale: String?) -> String? {
+        if let locale {
+            if let value = translations[locale], !value.isEmpty {
+                return value
+            }
+            if let key = translations.keys.first(where: { $0.caseInsensitiveCompare(locale) == .orderedSame }),
+               let value = translations[key], !value.isEmpty {
+                return value
+            }
+        }
+        return text
+    }
+
+    /// Writes text for a locale. Primary locale (or nil) also updates `text`.
+    mutating func setResolvedText(_ value: String, for locale: String?, primaryLocale: String?) {
+        if let locale {
+            translations[locale] = value
+            let isPrimary = primaryLocale.map {
+                $0.caseInsensitiveCompare(locale) == .orderedSame
+            } ?? false
+            if isPrimary {
+                text = value
+            }
+        } else {
+            text = value
+        }
+    }
+
     init(type: LayerType) {
         self.id = UUID()
         self.type = type
@@ -80,6 +110,7 @@ struct ScreenshotLayer: Codable, Identifiable {
         self.heightFraction = type == .text ? 0.1 : 0.4
         self.isVisible = true
         self.text = "Your text here"
+        self.translations = [:]
         self.fontSizePt = 40
         self.colorHex = "#FFFFFF"
         self.isBold = true
@@ -93,7 +124,7 @@ struct ScreenshotLayer: Codable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, type, xFraction, yFraction, widthFraction, heightFraction, isVisible
-        case text, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
+        case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
         case imageData
     }
 
@@ -107,6 +138,7 @@ struct ScreenshotLayer: Codable, Identifiable {
         heightFraction = try c.decodeIfPresent(Double.self, forKey: .heightFraction) ?? 0.1
         isVisible = try c.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true
         text = try c.decodeIfPresent(String.self, forKey: .text)
+        translations = try c.decodeIfPresent([String: String].self, forKey: .translations) ?? [:]
         fontSizePt = try c.decodeIfPresent(Double.self, forKey: .fontSizePt) ?? 40
         colorHex = try c.decodeIfPresent(String.self, forKey: .colorHex) ?? "#FFFFFF"
         isBold = try c.decodeIfPresent(Bool.self, forKey: .isBold) ?? true

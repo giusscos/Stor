@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import AppKit
 
 struct AppDetailView: View {
@@ -24,10 +25,13 @@ struct AppDetailView: View {
             switch selectedSection {
             case .listing:
                 ListingTabView(app: app)
+                    .id(app.persistentModelID)
             case .keywords:
                 KeywordsTabView(app: app)
+                    .id(app.persistentModelID)
             case .screenshots:
                 ScreenshotEditorView(app: app)
+                    .id(app.persistentModelID)
             }
         }
         .navigationTitle(app.name)
