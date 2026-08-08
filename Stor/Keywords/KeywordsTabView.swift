@@ -12,9 +12,15 @@ struct KeywordsTabView: View {
     @State private var isRefreshing         = false
     @State private var isCheckingRankings   = false
     @State private var asyncError: String?
+    @State private var importMessage: String?
     @State private var searchAdsCredentials: SearchAdsCredentials?
 
-    private let countries = ["US", "GB", "DE", "FR", "IT", "ES", "JP", "CA", "AU", "BR"]
+    private let baseCountries = ["US", "GB", "DE", "FR", "IT", "ES", "JP", "CA", "AU", "BR"]
+
+    private var countries: [String] {
+        let fromKeywords = Set(app.trackedKeywords.map(\.country))
+        return Array(Set(baseCountries).union(fromKeywords)).sorted()
+    }
 
     var filteredKeywords: [TrackedKeyword] {
         let byCountry = app.trackedKeywords.filter { $0.country == selectedCountry }
@@ -23,6 +29,39 @@ struct KeywordsTabView: View {
         return byCountry
             .filter { $0.term.localizedCaseInsensitiveContains(terms) }
             .sorted { $0.term < $1.term }
+    }
+
+    /// Latest listing snapshot, if any.
+    private var latestSnapshot: MetadataSnapshot? {
+        app.snapshots.sorted(by: { $0.capturedAt > $1.capturedAt }).first
+    }
+
+    /// Listing keywords from every localization that maps to a storefront country.
+    private var listingKeywordSources: [(locale: String, country: String, terms: [String])] {
+        guard let snapshot = latestSnapshot else { return [] }
+        return snapshot.localizations.compactMap { localization in
+            guard let country = countryCode(fromLocale: localization.locale) else { return nil }
+            let terms = parseKeywordTerms(localization.keywords)
+            guard !terms.isEmpty else { return nil }
+            return (localization.locale, country, terms)
+        }
+        .sorted { $0.locale < $1.locale }
+    }
+
+    /// Comma-separated ASC keywords from the latest listing snapshot for the selected country.
+    private var listingKeywordsForSelectedCountry: (locale: String, terms: [String])? {
+        let matches = listingKeywordSources.filter {
+            $0.country.caseInsensitiveCompare(selectedCountry) == .orderedSame
+        }
+        let source =
+            matches.first(where: { $0.locale.caseInsensitiveCompare(app.primaryLocale) == .orderedSame })
+            ?? matches.first
+        guard let source else { return nil }
+        return (source.locale, source.terms)
+    }
+
+    private var hasListingKeywords: Bool {
+        !listingKeywordSources.isEmpty
     }
 
     var body: some View {
@@ -57,6 +96,14 @@ struct KeywordsTabView: View {
         } message: {
             Text(asyncError ?? "")
         }
+        .alert("Import from Listing", isPresented: Binding(
+            get: { importMessage != nil },
+            set: { if !$0 { importMessage = nil } }
+        )) {
+            Button("OK") { importMessage = nil }
+        } message: {
+            Text(importMessage ?? "")
+        }
     }
 
     // MARK: - Views
@@ -90,21 +137,30 @@ struct KeywordsTabView: View {
             .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
             .frame(maxWidth: 260)
 
-            Picker("Country", selection: $selectedCountry) {
+            Menu {
                 ForEach(countries, id: \.self) { cc in
-                    Text(Locale.current.localizedString(forRegionCode: cc) ?? cc).tag(cc)
+                    Button(Locale.current.localizedString(forRegionCode: cc) ?? cc) {
+                        selectedCountry = cc
+                    }
                 }
+            } label: {
+                Text(Locale.current.localizedString(forRegionCode: selectedCountry) ?? selectedCountry)
             }
-            .frame(width: 150)
+            .fixedSize()
 
             Spacer()
 
             if searchAdsCredentials != nil {
                 Button(action: refreshPopularity) {
-                    if isRefreshing {
-                        ProgressView().scaleEffect(0.7)
-                    } else {
-                        Label("Refresh Popularity", systemImage: "arrow.clockwise")
+                    Label {
+                        Text("Refresh Popularity")
+                    } icon: {
+                        if isRefreshing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
                     }
                 }
                 .buttonStyle(.bordered)
@@ -113,15 +169,34 @@ struct KeywordsTabView: View {
             }
 
             Button(action: checkRankings) {
-                if isCheckingRankings {
-                    ProgressView().scaleEffect(0.7)
-                } else {
-                    Label("Check Rankings", systemImage: "list.number")
+                Label {
+                    Text("Check Rankings")
+                } icon: {
+                    if isCheckingRankings {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "list.number")
+                    }
                 }
             }
             .buttonStyle(.bordered)
             .disabled(isCheckingRankings || filteredKeywords.isEmpty)
             .help("Check App Store search ranking positions via iTunes Search API")
+
+            Button(action: importFromListing) {
+                Label("Import from Listing", systemImage: "square.and.arrow.down")
+            }
+            .buttonStyle(.bordered)
+            .disabled(listingKeywordsForSelectedCountry == nil)
+            .help("Add App Store Connect keywords from the latest listing snapshot for this country")
+
+            Button(action: importAllLanguages) {
+                Label("Import All Languages", systemImage: "globe")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasListingKeywords)
+            .help("Add App Store Connect keywords from every localization in the latest listing snapshot")
 
             Button { showAddKeyword = true } label: {
                 Label("Add Keywords", systemImage: "plus")
@@ -168,15 +243,112 @@ struct KeywordsTabView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("Add Keywords") { showAddKeyword = true }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 4)
+            HStack(spacing: 10) {
+                if listingKeywordsForSelectedCountry != nil {
+                    Button("Import from Listing") { importFromListing() }
+                        .buttonStyle(.bordered)
+                }
+                if hasListingKeywords {
+                    Button("Import All Languages") { importAllLanguages() }
+                        .buttonStyle(.bordered)
+                }
+                Button("Add Keywords") { showAddKeyword = true }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.horizontal, 24)
     }
 
     // MARK: - Actions
+
+    private func importFromListing() {
+        guard let source = listingKeywordsForSelectedCountry else {
+            importMessage = "No listing keywords found for \(selectedCountry). Sync the Listing tab first."
+            return
+        }
+
+        let added = insertKeywords(source.terms, locale: source.locale, country: selectedCountry)
+        let skipped = source.terms.count - added
+        importMessage = importSummary(added: added, skipped: skipped, detail: source.locale)
+    }
+
+    private func importAllLanguages() {
+        let sources = listingKeywordSources
+        guard !sources.isEmpty else {
+            importMessage = "No listing keywords found. Sync the Listing tab first."
+            return
+        }
+
+        var added = 0
+        var considered = 0
+        var countriesHit = Set<String>()
+        for source in sources {
+            considered += source.terms.count
+            let count = insertKeywords(source.terms, locale: source.locale, country: source.country)
+            if count > 0 { countriesHit.insert(source.country) }
+            added += count
+        }
+        let skipped = considered - added
+        let localeCount = sources.count
+        let detail = "\(localeCount) locale\(localeCount == 1 ? "" : "s")"
+            + (countriesHit.isEmpty ? "" : " · \(countriesHit.count) countr\(countriesHit.count == 1 ? "y" : "ies")")
+        importMessage = importSummary(added: added, skipped: skipped, detail: detail)
+    }
+
+    @discardableResult
+    private func insertKeywords(_ terms: [String], locale: String, country: String) -> Int {
+        let existing = Set(
+            app.trackedKeywords
+                .filter { $0.country.caseInsensitiveCompare(country) == .orderedSame }
+                .map { $0.term.lowercased() }
+        )
+        var added = 0
+        var seen = existing
+        for term in terms {
+            let key = term.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            let kw = TrackedKeyword(term: term, locale: locale, country: country)
+            kw.app = app
+            app.trackedKeywords.append(kw)
+            modelContext.insert(kw)
+            added += 1
+        }
+        return added
+    }
+
+    private func importSummary(added: Int, skipped: Int, detail: String) -> String {
+        if added == 0 {
+            return skipped == 0
+                ? "No keywords to import."
+                : "All \(skipped) listing keyword\(skipped == 1 ? "" : "s") are already tracked."
+        }
+        if skipped == 0 {
+            return "Added \(added) keyword\(added == 1 ? "" : "s") from \(detail)."
+        }
+        return "Added \(added) keyword\(added == 1 ? "" : "s") from \(detail). Skipped \(skipped) duplicate\(skipped == 1 ? "" : "s")."
+    }
+
+    private func parseKeywordTerms(_ raw: String?) -> [String] {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return []
+        }
+        return raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func countryCode(fromLocale locale: String) -> String? {
+        let parts = locale.replacingOccurrences(of: "_", with: "-").split(separator: "-").map(String.init)
+        guard let region = parts.last, region.count == 2, region.allSatisfy(\.isLetter) else {
+            return nil
+        }
+        // Script codes like "Hans" are 4 letters; 2-letter suffix is the region.
+        return region.uppercased()
+    }
 
     private func refreshPopularity() {
         guard let credentials = searchAdsCredentials else {
@@ -237,28 +409,33 @@ private struct KeywordRow: View {
     var body: some View {
         HStack(spacing: 0) {
             Text(keyword.term)
+                .font(.body)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
                 if isRefreshing && keyword.popularityScore == nil {
-                    ProgressView().scaleEffect(0.6)
-                        .frame(width: 110, alignment: .leading)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 110, height: 14, alignment: .leading)
                 } else if let score = keyword.popularityScore {
                     PopularityBar(score: score).frame(width: 110)
                 } else {
-                    Text("—").foregroundStyle(.tertiary).frame(width: 110, alignment: .leading)
+                    Text("—")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 110, alignment: .leading)
                 }
             }
 
             Group {
                 if let updated = keyword.popularityLastUpdated {
                     Text(updated, style: .relative)
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(.secondary)
                         .frame(width: 110, alignment: .leading)
                 } else {
                     Text("Never")
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(.tertiary)
                         .frame(width: 110, alignment: .leading)
                 }
@@ -266,20 +443,24 @@ private struct KeywordRow: View {
 
             Group {
                 if isCheckingRankings && latestRanking == nil {
-                    ProgressView().scaleEffect(0.6).frame(width: 70, alignment: .leading)
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 70, height: 14, alignment: .leading)
                 } else if let pos = latestRanking?.position {
                     Text("#\(pos)")
+                        .font(.body)
                         .fontWeight(.medium)
                         .monospacedDigit()
                         .foregroundStyle(pos <= 10 ? .green : .primary)
                         .frame(width: 70, alignment: .leading)
                 } else if latestRanking != nil {
                     Text(">200")
-                        .font(.caption)
+                        .font(.body)
                         .foregroundStyle(.tertiary)
                         .frame(width: 70, alignment: .leading)
                 } else {
                     Text("—")
+                        .font(.body)
                         .foregroundStyle(.tertiary)
                         .frame(width: 70, alignment: .leading)
                 }
