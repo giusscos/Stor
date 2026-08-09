@@ -161,6 +161,8 @@ final class ImageCache {
 struct ScreenshotLayer: Codable, Identifiable {
     var id: UUID
     var type: LayerType
+    /// Optional display name shown in the layers list (mainly for image layers).
+    var name: String?
     var xFraction: Double
     var yFraction: Double
     var widthFraction: Double
@@ -251,6 +253,7 @@ struct ScreenshotLayer: Codable, Identifiable {
     init(type: LayerType) {
         self.id = UUID()
         self.type = type
+        self.name = nil
         self.xFraction = 0.1
         self.yFraction = 0.1
         self.widthFraction = 0.8
@@ -281,6 +284,19 @@ struct ScreenshotLayer: Codable, Identifiable {
         self.imageData = nil
     }
 
+    /// Label shown in the layers list: custom name when set, otherwise text preview or "Image".
+    func listLabel(previewLocale: String?) -> String {
+        if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return name
+        }
+        switch type {
+        case .text:
+            return plainPreviewLabel(for: previewLocale)
+        case .image:
+            return "Image"
+        }
+    }
+
     var hasTextBackground: Bool {
         get { textBackgroundHex != nil }
         set {
@@ -293,7 +309,7 @@ struct ScreenshotLayer: Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, xFraction, yFraction, widthFraction, heightFraction, isVisible, frameAssetName, imageCornerRadius, imageFills
+        case id, type, name, xFraction, yFraction, widthFraction, heightFraction, isVisible, frameAssetName, imageCornerRadius, imageFills
         case contentScale, contentOffsetX, contentOffsetY
         case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
         case textBackgroundHex, textPaddingPt, textCornerRadiusPt, textUsesMarkdown
@@ -305,6 +321,7 @@ struct ScreenshotLayer: Codable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         type = try c.decode(LayerType.self, forKey: .type)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
         xFraction = try c.decodeIfPresent(Double.self, forKey: .xFraction) ?? 0.1
         yFraction = try c.decodeIfPresent(Double.self, forKey: .yFraction) ?? 0.1
         widthFraction = try c.decodeIfPresent(Double.self, forKey: .widthFraction) ?? 0.8
@@ -360,22 +377,18 @@ extension ScreenshotLayer {
     }
 }
 
-// MARK: - Image layer style (copy / paste / default)
+// MARK: - Image layer style (copy / paste / presets)
 
-/// The image-layer settings that travel together when copying between layers or
-/// saving as the default for newly added images: device frame, fit/fill, corner
-/// radius, content transform, and layout box.
-struct ImageLayerStyle: Codable {
+/// The image-section settings that travel together when copying between layers or
+/// saving as a preset: device frame, fit/fill, corner radius, and content transform.
+/// Layout position/size are not included.
+struct ImageLayerStyle: Codable, Equatable {
     var frameAssetName: String?
     var imageFills: Bool
     var imageCornerRadius: Double
     var contentScale: Double
     var contentOffsetX: Double
     var contentOffsetY: Double
-    var xFraction: Double
-    var yFraction: Double
-    var widthFraction: Double
-    var heightFraction: Double
 
     init(from layer: ScreenshotLayer) {
         frameAssetName = layer.frameAssetName
@@ -384,10 +397,6 @@ struct ImageLayerStyle: Codable {
         contentScale = layer.contentScale
         contentOffsetX = layer.contentOffsetX
         contentOffsetY = layer.contentOffsetY
-        xFraction = layer.xFraction
-        yFraction = layer.yFraction
-        widthFraction = layer.widthFraction
-        heightFraction = layer.heightFraction
     }
 
     func apply(to layer: inout ScreenshotLayer) {
@@ -397,44 +406,136 @@ struct ImageLayerStyle: Codable {
         layer.contentScale = contentScale
         layer.contentOffsetX = contentOffsetX
         layer.contentOffsetY = contentOffsetY
-        layer.xFraction = xFraction
-        layer.yFraction = yFraction
-        layer.widthFraction = widthFraction
-        layer.heightFraction = heightFraction
+    }
+
+    func matches(_ layer: ScreenshotLayer) -> Bool {
+        self == ImageLayerStyle(from: layer)
     }
 }
 
-/// Session clipboard for image-layer styles plus the persisted default applied to
-/// every newly added image layer.
+/// A named, persisted snapshot of an `ImageLayerStyle`.
+struct ImageLayerStylePreset: Codable, Identifiable, Equatable {
+    var id: UUID
+    var name: String
+    var style: ImageLayerStyle
+
+    init(id: UUID = UUID(), name: String, style: ImageLayerStyle) {
+        self.id = id
+        self.name = name
+        self.style = style
+    }
+}
+
+/// Session clipboard for image-layer styles, plus named presets and an optional
+/// favorite used as the default for newly added images and Reset.
 @MainActor
 final class ImageLayerStyleStore: ObservableObject {
     static let shared = ImageLayerStyleStore()
     private static let defaultsKey = "ScreenshotEditor.defaultImageLayerStyle"
+    private static let presetsKey = "ScreenshotEditor.imageLayerStylePresets"
+    private static let favoriteKey = "ScreenshotEditor.favoriteImageLayerStylePresetId"
 
     @Published var copied: ImageLayerStyle?
-    @Published private(set) var savedDefault: ImageLayerStyle?
+    @Published private(set) var presets: [ImageLayerStylePreset] = []
+    @Published private(set) var favoritePresetId: UUID?
+
+    /// Style of the favorited preset, if any — used for Reset and new image layers.
+    var savedDefault: ImageLayerStyle? {
+        presets.first(where: { $0.id == favoritePresetId })?.style
+    }
 
     private init() {
-        if let data = UserDefaults.standard.data(forKey: Self.defaultsKey) {
-            savedDefault = try? JSONDecoder().decode(ImageLayerStyle.self, from: data)
+        load()
+    }
+
+    func addPreset(name: String, style: ImageLayerStyle) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved = trimmed.isEmpty ? nextPresetName() : trimmed
+        presets.append(ImageLayerStylePreset(name: resolved, style: style))
+        persistPresets()
+    }
+
+    func renamePreset(id: UUID, name: String) {
+        guard let index = presets.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        presets[index].name = trimmed
+        persistPresets()
+    }
+
+    func removePreset(id: UUID) {
+        presets.removeAll { $0.id == id }
+        if favoritePresetId == id {
+            favoritePresetId = nil
+            persistFavorite()
         }
+        persistPresets()
     }
 
-    func saveAsDefault(_ style: ImageLayerStyle) {
-        savedDefault = style
-        if let data = try? JSONEncoder().encode(style) {
-            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+    func toggleFavorite(id: UUID) {
+        if favoritePresetId == id {
+            favoritePresetId = nil
+        } else {
+            favoritePresetId = id
         }
+        persistFavorite()
     }
 
-    func clearDefault() {
-        savedDefault = nil
-        UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
-    }
-
-    /// Applies the saved default (when set) to a freshly created image layer.
+    /// Applies the favorite preset (when set) to a freshly created image layer.
     func applyDefault(to layer: inout ScreenshotLayer) {
         savedDefault?.apply(to: &layer)
+    }
+
+    func nextPresetName() -> String {
+        "Preset \(presets.count + 1)"
+    }
+
+    private func load() {
+        if let data = UserDefaults.standard.data(forKey: Self.presetsKey),
+           let decoded = try? JSONDecoder().decode([ImageLayerStylePreset].self, from: data) {
+            presets = decoded
+        }
+
+        if let idString = UserDefaults.standard.string(forKey: Self.favoriteKey),
+           let id = UUID(uuidString: idString),
+           presets.contains(where: { $0.id == id }) {
+            favoritePresetId = id
+        }
+
+        // Migrate the previous single saved-default into a favorited preset.
+        if presets.isEmpty,
+           let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+           let legacy = try? JSONDecoder().decode(ImageLayerStyle.self, from: data) {
+            let preset = ImageLayerStylePreset(name: "Default", style: legacy)
+            presets = [preset]
+            favoritePresetId = preset.id
+            persistPresets()
+            persistFavorite()
+            UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+        } else if favoritePresetId == nil,
+                  let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+                  let legacy = try? JSONDecoder().decode(ImageLayerStyle.self, from: data),
+                  let match = presets.first(where: { $0.style == legacy }) {
+            favoritePresetId = match.id
+            persistFavorite()
+            UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+        } else if UserDefaults.standard.data(forKey: Self.defaultsKey) != nil {
+            UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+        }
+    }
+
+    private func persistPresets() {
+        if let data = try? JSONEncoder().encode(presets) {
+            UserDefaults.standard.set(data, forKey: Self.presetsKey)
+        }
+    }
+
+    private func persistFavorite() {
+        if let favoritePresetId {
+            UserDefaults.standard.set(favoritePresetId.uuidString, forKey: Self.favoriteKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.favoriteKey)
+        }
     }
 }
 

@@ -16,6 +16,7 @@ struct ScreenshotEditorView: View {
     @State private var previewLocale: String = ""
     @State private var importMessage: String?
     @State private var importSucceeded = false
+    @State private var renamingTemplateId: PersistentIdentifier?
 
     private enum ScreenshotsViewMode: String, CaseIterable {
         case editor
@@ -261,15 +262,18 @@ struct ScreenshotEditorView: View {
                             TemplateSidebarRow(
                                 template: template,
                                 isSelected: selectedTemplate == template,
-                                isLast: index == templates.count - 1
+                                isLast: index == templates.count - 1,
+                                isRenaming: renamingTemplateId == template.id,
+                                onRenameEnd: { renamingTemplateId = nil }
                             )
                             .contentShape(Rectangle())
                             .onTapGesture(count: 2) {
                                 selectedTemplate = template
-                                viewMode = .editor
+                                renamingTemplateId = template.id
                             }
                             .onTapGesture {
                                 selectedTemplate = template
+                                renamingTemplateId = nil
                             }
                         }
                     }
@@ -474,9 +478,13 @@ private func renderBackgroundImage(_ background: CanvasBackground, size: CGSize)
 // MARK: - Template sidebar row
 
 private struct TemplateSidebarRow: View {
-    let template: ScreenshotTemplate
+    @Bindable var template: ScreenshotTemplate
     let isSelected: Bool
     let isLast: Bool
+    var isRenaming: Bool = false
+    var onRenameEnd: () -> Void = {}
+
+    @FocusState private var nameFocused: Bool
 
     private var deviceIcon: String {
         switch template.deviceType {
@@ -491,10 +499,26 @@ private struct TemplateSidebarRow: View {
             timelineRail
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(template.name)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+                if isRenaming {
+                    TextField("Name", text: $template.name)
+                        .font(.callout.weight(.semibold))
+                        .textFieldStyle(.plain)
+                        .focused($nameFocused)
+                        .onSubmit {
+                            if template.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                template.name = "Screenshot"
+                            }
+                            onRenameEnd()
+                        }
+                        .onChange(of: nameFocused) { _, focused in
+                            if !focused { onRenameEnd() }
+                        }
+                } else {
+                    Text(template.name)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
 
                 HStack(spacing: 6) {
                     Image(systemName: deviceIcon)
@@ -519,6 +543,9 @@ private struct TemplateSidebarRow: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: isSelected)
+        .onChange(of: isRenaming) { _, renaming in
+            if renaming { nameFocused = true }
+        }
     }
 
     private var timelineRail: some View {
@@ -557,6 +584,7 @@ private struct TemplateEditorView: View {
     var onLocaleChange: (String) -> Void
 
     @State private var selectedLayerId: UUID?
+    @State private var renamingLayerId: UUID?
     @State private var showAddImage = false
     @State private var canvasZoom: CGFloat = 1.0
     @State private var centerRequest = 0
@@ -733,6 +761,13 @@ private struct TemplateEditorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     InspectorSection(title: "Canvas") {
                         VStack(alignment: .leading, spacing: 12) {
+                            InspectorLabeledRow("Name") {
+                                TextField("", text: $template.name)
+                                    .textFieldStyle(.plain)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+
                             InspectorLabeledRow("Device") {
                                 Picker("", selection: $template.deviceType) {
                                     ForEach(DeviceType.allCases, id: \.self) { dt in
@@ -762,15 +797,25 @@ private struct TemplateEditorView: View {
                             } else {
                                 ForEach(template.layers) { layer in
                                     LayerListRow(
-                                        layer: layer,
+                                        layer: layerBinding(for: layer.id),
                                         previewLocale: previewLocale,
-                                        isSelected: layer.id == selectedLayerId
-                                    ) {
-                                        selectedLayerId = layer.id
-                                    } onDelete: {
-                                        if selectedLayerId == layer.id { selectedLayerId = nil }
-                                        template.layers.removeAll { $0.id == layer.id }
-                                    }
+                                        isSelected: layer.id == selectedLayerId,
+                                        isRenaming: renamingLayerId == layer.id,
+                                        onRenameEnd: { renamingLayerId = nil },
+                                        onSelect: {
+                                            selectedLayerId = layer.id
+                                            renamingLayerId = nil
+                                        },
+                                        onBeginRename: {
+                                            selectedLayerId = layer.id
+                                            renamingLayerId = layer.id
+                                        },
+                                        onDelete: {
+                                            if selectedLayerId == layer.id { selectedLayerId = nil }
+                                            if renamingLayerId == layer.id { renamingLayerId = nil }
+                                            template.layers.removeAll { $0.id == layer.id }
+                                        }
+                                    )
                                 }
                             }
 
@@ -825,6 +870,19 @@ private struct TemplateEditorView: View {
         ImageLayerStyleStore.shared.applyDefault(to: &newLayer)
         template.layers.append(newLayer)
         selectedLayerId = newLayer.id
+    }
+
+    private func layerBinding(for id: UUID) -> Binding<ScreenshotLayer> {
+        Binding(
+            get: {
+                template.layers.first(where: { $0.id == id }) ?? ScreenshotLayer(type: .text)
+            },
+            set: { newValue in
+                if let idx = template.layers.firstIndex(where: { $0.id == id }) {
+                    template.layers[idx] = newValue
+                }
+            }
+        )
     }
 }
 
@@ -1002,8 +1060,6 @@ private struct ScreenshotCanvas: View {
         newLayer.heightFraction = 0.5
         newLayer.xFraction = xFrac
         newLayer.yFraction = yFrac
-        // A saved default wins over the drop location so framed screenshots land in
-        // the same spot on every template.
         ImageLayerStyleStore.shared.applyDefault(to: &newLayer)
         template.layers.append(newLayer)
         selectedLayerId = newLayer.id
@@ -1635,11 +1691,17 @@ private struct MeshPointCanvas: View {
 // MARK: - Layer list row
 
 private struct LayerListRow: View {
-    let layer: ScreenshotLayer
+    @Binding var layer: ScreenshotLayer
     var previewLocale: String
     let isSelected: Bool
+    var isRenaming: Bool = false
+    var onRenameEnd: () -> Void = {}
     let onSelect: () -> Void
+    var onBeginRename: () -> Void = {}
     let onDelete: () -> Void
+
+    @FocusState private var nameFocused: Bool
+    @State private var draftName: String = ""
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1647,9 +1709,20 @@ private struct LayerListRow: View {
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 16)
 
-            Text(layer.type == .text ? layer.plainPreviewLabel(for: previewLocale) : "Image")
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if isRenaming {
+                TextField("Image", text: $draftName)
+                    .textFieldStyle(.plain)
+                    .focused($nameFocused)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .onSubmit { commitRename() }
+                    .onChange(of: nameFocused) { _, focused in
+                        if !focused { commitRename() }
+                    }
+            } else {
+                Text(layer.listLabel(previewLocale: previewLocale))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
             Button(action: onDelete) {
                 Image(systemName: "minus.circle.fill")
@@ -1664,7 +1737,26 @@ private struct LayerListRow: View {
                 .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
         )
         .contentShape(Rectangle())
-        .onTapGesture { onSelect() }
+        .onTapGesture(count: 2) {
+            guard layer.type == .image else { return }
+            onBeginRename()
+        }
+        .onTapGesture {
+            if !isRenaming { onSelect() }
+        }
+        .onChange(of: isRenaming) { _, renaming in
+            if renaming {
+                draftName = layer.name ?? ""
+                nameFocused = true
+            }
+        }
+    }
+
+    private func commitRename() {
+        guard isRenaming else { return }
+        let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        layer.name = trimmed.isEmpty ? nil : trimmed
+        onRenameEnd()
     }
 }
 
@@ -1681,6 +1773,10 @@ private struct LayerPropertiesView: View {
     @ObservedObject private var styleStore = ImageLayerStyleStore.shared
     @State private var activeMarkdownFormats: Set<MarkdownInlineFormat> = []
     @State private var pendingMarkdownAction: MarkdownEditorAction?
+    @State private var showSavePresetAlert = false
+    @State private var newPresetName = ""
+    @State private var renamingPresetId: UUID?
+    @State private var renamePresetDraft = ""
 
     /// Live-preview hook for a buffered slider: renders the in-flight value on the
     /// canvas by overriding one property on top of the committed layer.
@@ -1987,7 +2083,7 @@ private struct LayerPropertiesView: View {
                             Button("Copy") {
                                 styleStore.copied = ImageLayerStyle(from: layer)
                             }
-                            .help("Copy frame, fill, radius, scale/offset and layout from this image")
+                            .help("Copy frame, fill, radius, and scale/offset from this image")
 
                             Button("Paste") {
                                 if let style = styleStore.copied {
@@ -1997,25 +2093,35 @@ private struct LayerPropertiesView: View {
                                 }
                             }
                             .disabled(styleStore.copied == nil)
-                            .help("Apply the copied image style to this layer")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                            .help("Apply the copied image options to this layer")
 
-                        Button(styleStore.savedDefault == nil ? "Make Default for New Images" : "Update Default for New Images") {
-                            styleStore.saveAsDefault(ImageLayerStyle(from: layer))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("New image layers (added or dropped) start with this frame, fill, radius, scale and layout")
-
-                        if styleStore.savedDefault != nil {
-                            Button("Clear Default") {
-                                styleStore.clearDefault()
+                            Button("Reset") {
+                                if let style = styleStore.savedDefault {
+                                    var updated = layer
+                                    style.apply(to: &updated)
+                                    layer = updated
+                                }
                             }
-                            .buttonStyle(.borderless)
-                            .controlSize(.small)
-                            .help("New image layers go back to the plain automatic setup")
+                            .disabled(styleStore.savedDefault?.matches(layer) != false)
+                            .help("Restore frame, fill, radius, and scale/offset to the favorite preset")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button("Save Preset") {
+                            newPresetName = styleStore.nextPresetName()
+                            showSavePresetAlert = true
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Save this image’s frame, fill, radius, and scale/offset as a named preset")
+
+                        if !styleStore.presets.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(styleStore.presets) { preset in
+                                    stylePresetRow(preset)
+                                }
+                            }
                         }
 
                         if let assetName = layer.frameAssetName,
@@ -2032,6 +2138,18 @@ private struct LayerPropertiesView: View {
                                 }
                         }
                     }
+                }
+                .alert("Save Preset", isPresented: $showSavePresetAlert) {
+                    TextField("Name", text: $newPresetName)
+                    Button("Save") {
+                        styleStore.addPreset(
+                            name: newPresetName,
+                            style: ImageLayerStyle(from: layer)
+                        )
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Presets store frame, fill, radius, and content scale/offset.")
                 }
             }
 
@@ -2138,6 +2256,84 @@ private struct LayerPropertiesView: View {
         if !layer.textUsesMarkdown {
             layer.textUsesMarkdown = true
         }
+    }
+
+    private func stylePresetRow(_ preset: ImageLayerStylePreset) -> some View {
+        let isFavorite = styleStore.favoritePresetId == preset.id
+        let isActive = preset.style.matches(layer)
+        let isRenaming = renamingPresetId == preset.id
+
+        return HStack(spacing: 6) {
+            if isRenaming {
+                TextField("Name", text: $renamePresetDraft)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .onSubmit { commitPresetRename() }
+                    .onExitCommand { renamingPresetId = nil }
+            } else {
+                Button {
+                    var updated = layer
+                    preset.style.apply(to: &updated)
+                    layer = updated
+                } label: {
+                    Text(preset.name)
+                        .font(.caption)
+                        .foregroundStyle(isActive ? Color.accentColor : .primary)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Apply this preset")
+                .contextMenu {
+                    Button("Rename") {
+                        renamePresetDraft = preset.name
+                        renamingPresetId = preset.id
+                    }
+                    Button(isFavorite ? "Remove Favorite" : "Make Favorite") {
+                        styleStore.toggleFavorite(id: preset.id)
+                    }
+                    Divider()
+                    Button("Delete", role: .destructive) {
+                        styleStore.removePreset(id: preset.id)
+                    }
+                }
+            }
+
+            Button {
+                styleStore.toggleFavorite(id: preset.id)
+            } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.caption)
+                    .foregroundStyle(isFavorite ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .help(isFavorite
+                  ? "Favorite — used for Reset and new images. Click to clear."
+                  : "Mark as favorite for Reset and new images")
+
+            Button {
+                styleStore.removePreset(id: preset.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Delete preset")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isActive ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+        )
+    }
+
+    private func commitPresetRename() {
+        guard let id = renamingPresetId else { return }
+        styleStore.renamePreset(id: id, name: renamePresetDraft)
+        renamingPresetId = nil
     }
 
     private func layoutSlider(
