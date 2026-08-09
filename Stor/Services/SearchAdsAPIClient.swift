@@ -47,15 +47,34 @@ final class SearchAdsAPIClient {
         country: String,
         credentials: SearchAdsCredentials
     ) async throws -> Int? {
+        let suggestions = try await fetchSpotlightSuggestions(
+            query: keyword,
+            country: country,
+            credentials: credentials
+        )
+        let target = keyword.lowercased()
+        if let match = suggestions.first(where: { $0.text.lowercased() == target }) {
+            return match.score
+        }
+        // Keyword not found in suggestions → treat as low volume when API returned rows
+        return suggestions.isEmpty ? nil : 0
+    }
+
+    /// Spotlight suggestion rows (related terms + scores) for a query.
+    func fetchSpotlightSuggestions(
+        query: String,
+        country: String,
+        credentials: SearchAdsCredentials
+    ) async throws -> [SpotlightSuggestion] {
         let token = try await accessToken(for: credentials)
 
         var comps = URLComponents(string: "\(base)/search/keywords/spotlight")!
         comps.queryItems = [
-            .init(name: "query",           value: keyword),
+            .init(name: "query",           value: query),
             .init(name: "limit",           value: "20"),
             .init(name: "countryOrRegion", value: country)
         ]
-        guard let url = comps.url else { return nil }
+        guard let url = comps.url else { return [] }
 
         var req = URLRequest(url: url)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -68,7 +87,7 @@ final class SearchAdsAPIClient {
             throw SearchAdsError.httpError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
 
-        return extractScore(for: keyword, from: data)
+        return parseSuggestions(from: data)
     }
 
     /// Refreshes popularity scores for all keywords and updates them in-place.
@@ -83,7 +102,7 @@ final class SearchAdsAPIClient {
         }
     }
 
-    // MARK: Token
+    // MARK: - Token
 
     private func accessToken(for credentials: SearchAdsCredentials) async throws -> String {
         if let t = cachedToken, let exp = tokenExpiry, Date() < exp { return t }
@@ -137,22 +156,32 @@ final class SearchAdsAPIClient {
         return data.base64URLEncoded()
     }
 
-    // MARK: Score extraction
+    // MARK: - Suggestions parsing
 
-    private func extractScore(for keyword: String, from data: Data) -> Int? {
+    private func parseSuggestions(from data: Data) -> [SpotlightSuggestion] {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = json["data"] as? [[String: Any]] else { return nil }
+              let items = json["data"] as? [[String: Any]] else { return [] }
 
-        let target = keyword.lowercased()
-        for item in items {
-            guard (item["text"] as? String)?.lowercased() == target else { continue }
-            // Field name varies across API versions; try all known names
+        return items.compactMap { item in
+            guard let text = item["text"] as? String, !text.isEmpty else { return nil }
+            var score: Int?
             for key in ["score", "popularity", "impressionShare"] {
-                if let v = item[key] as? Int    { return min(100, max(0, v)) }
-                if let v = item[key] as? Double { return min(100, max(0, Int(v * 100))) }
+                if let v = item[key] as? Int {
+                    score = min(100, max(0, v))
+                    break
+                }
+                if let v = item[key] as? Double {
+                    score = min(100, max(0, Int(v * 100)))
+                    break
+                }
             }
+            return SpotlightSuggestion(text: text, score: score)
         }
-        // Keyword not found in suggestions → treat as low volume
-        return items.isEmpty ? nil : 0
     }
+}
+
+/// A related keyword from Apple Search Ads spotlight.
+struct SpotlightSuggestion: Hashable {
+    let text: String
+    let score: Int?
 }

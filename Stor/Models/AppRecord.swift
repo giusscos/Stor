@@ -17,6 +17,9 @@ final class AppRecord {
     var trackedKeywords: [TrackedKeyword] = []
 
     @Relationship(deleteRule: .cascade)
+    var competitors: [CompetitorApp] = []
+
+    @Relationship(deleteRule: .cascade)
     var screenshotTemplates: [ScreenshotTemplate] = []
 
     init(ascAppId: String, bundleId: String, name: String, primaryLocale: String, iconURL: String? = nil) {

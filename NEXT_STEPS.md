@@ -7,6 +7,7 @@
 - Text layer capsule chrome (background fill, padding, corner radius)
 - Markdown inline formatting (`**bold**`, `*italic*` only — no per-run color)
 - Fit-to-content width/height for text layers
+- Competitor Keyword Compare v1: Discover (SERP top 10), saved competitors, side-by-side rank compare, light keyword suggestions
 
 ---
 
@@ -24,12 +25,8 @@ Stay on **standard Markdown** for locale round-trip. Supported inline: `**bold**
 Excluded (not Markdown-native): per-run color, custom fonts per word.
 Layer-level color / weight / background remain outside the Markdown body.
 
-### 2. Competitor keyword discovery (Medium priority)
-Extend the Keywords tab with a "Discover" mode:
-- Fetch the top 10 results for a keyword via iTunes Search API
-- Display competitor apps (icon, name, subtitle)
-- Tap a competitor to see all keywords you share (intersection of tracked lists)
-- This is additive — no new credentials needed, same iTunes Search API as RankingChecker
+### 2. Full ASO pack (Medium priority)
+v1 competitor compare is shipped. Remaining ASO work (opportunity/difficulty scores, reverse-SERP competitor inventories, ASC Search Terms, listing keyword budget helper, scheduled refresh) is documented in [`ASO_PACK.md`](ASO_PACK.md).
 
 ### 3. Snapshot scheduling / auto-sync (Medium priority)
 Let the user set a daily/weekly sync cadence per app:

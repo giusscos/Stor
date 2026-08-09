@@ -7,6 +7,10 @@ struct KeywordsTabView: View {
 
     @State private var showAddKeyword       = false
     @State private var showConnectAds       = false
+    @State private var showDiscover         = false
+    @State private var showCompare          = false
+    @State private var showSuggest          = false
+    @State private var showImportLanguages  = false
     @State private var selectedCountry      = "US"
     @State private var searchText           = ""
     @State private var isRefreshing         = false
@@ -88,6 +92,28 @@ struct KeywordsTabView: View {
                 searchAdsCredentials = creds
             }
         }
+        .sheet(isPresented: $showDiscover) {
+            DiscoverKeywordView(app: app, country: selectedCountry)
+        }
+        .sheet(isPresented: $showCompare) {
+            CompareCompetitorsView(
+                app: app,
+                country: selectedCountry,
+                keywords: filteredKeywords
+            )
+        }
+        .sheet(isPresented: $showSuggest) {
+            SuggestKeywordsView(
+                app: app,
+                country: selectedCountry,
+                searchAdsCredentials: searchAdsCredentials
+            )
+        }
+        .sheet(isPresented: $showImportLanguages) {
+            ImportLanguagesSheet(sources: listingKeywordSources) { selected in
+                importSelectedSources(selected)
+            }
+        }
         .alert("Error", isPresented: Binding(
             get: { asyncError != nil },
             set: { if !$0 { asyncError = nil } }
@@ -109,7 +135,7 @@ struct KeywordsTabView: View {
     // MARK: - Views
 
     private var searchAdsBanner: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: "chart.bar.xaxis")
                 .foregroundStyle(.blue)
             Text("Connect Apple Search Ads to fetch keyword popularity scores (0–100).")
@@ -118,7 +144,6 @@ struct KeywordsTabView: View {
             Spacer()
             Button("Connect") { showConnectAds = true }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.small)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -126,85 +151,108 @@ struct KeywordsTabView: View {
     }
 
     private var controlsBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Search keywords…", text: $searchText)
-                    .textFieldStyle(.plain)
-            }
-            .padding(8)
-            .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
-            .frame(maxWidth: 260)
-
-            Menu {
-                ForEach(countries, id: \.self) { cc in
-                    Button(Locale.current.localizedString(forRegionCode: cc) ?? cc) {
-                        selectedCountry = cc
-                    }
+        VStack(spacing: 0) {
+            // Row 1: search + country + primary actions
+            HStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search keywords…", text: $searchText)
+                        .textFieldStyle(.plain)
                 }
-            } label: {
-                Text(Locale.current.localizedString(forRegionCode: selectedCountry) ?? selectedCountry)
-            }
-            .fixedSize()
+                .padding(8)
+                .background(.quinary, in: RoundedRectangle(cornerRadius: 8))
+                .frame(maxWidth: 260)
 
-            Spacer()
-
-            if searchAdsCredentials != nil {
-                Button(action: refreshPopularity) {
-                    Label {
-                        Text("Refresh Popularity")
-                    } icon: {
-                        if isRefreshing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.clockwise")
+                Menu {
+                    ForEach(countries, id: \.self) { cc in
+                        Button(Locale.current.localizedString(forRegionCode: cc) ?? cc) {
+                            selectedCountry = cc
                         }
                     }
+                } label: {
+                    Text(Locale.current.localizedString(forRegionCode: selectedCountry) ?? selectedCountry)
+                }
+                .fixedSize()
+
+                Spacer()
+
+                Button { showImportLanguages = true } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
                 }
                 .buttonStyle(.bordered)
-                .disabled(isRefreshing || filteredKeywords.isEmpty)
-                .help("Fetch popularity scores from Apple Search Ads")
-            }
+                .disabled(!hasListingKeywords)
+                .help("Import keywords from the latest listing snapshot")
 
-            Button(action: checkRankings) {
-                Label {
-                    Text("Check Rankings")
-                } icon: {
-                    if isCheckingRankings {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Image(systemName: "list.number")
-                    }
+                Button { showAddKeyword = true } label: {
+                    Label("Add Keywords", systemImage: "plus")
                 }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.bordered)
-            .disabled(isCheckingRankings || filteredKeywords.isEmpty)
-            .help("Check App Store search ranking positions via iTunes Search API")
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
-            Button(action: importFromListing) {
-                Label("Import from Listing", systemImage: "square.and.arrow.down")
-            }
-            .buttonStyle(.bordered)
-            .disabled(listingKeywordsForSelectedCountry == nil)
-            .help("Add App Store Connect keywords from the latest listing snapshot for this country")
+            Divider()
 
-            Button(action: importAllLanguages) {
-                Label("Import All Languages", systemImage: "globe")
-            }
-            .buttonStyle(.bordered)
-            .disabled(!hasListingKeywords)
-            .help("Add App Store Connect keywords from every localization in the latest listing snapshot")
+            // Row 2: scrollable tool buttons
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button { showDiscover = true } label: {
+                        Label("Discover", systemImage: "binoculars")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("See top App Store results for a keyword and save competitors")
 
-            Button { showAddKeyword = true } label: {
-                Label("Add Keywords", systemImage: "plus")
+                    Button { showCompare = true } label: {
+                        Label("Compare", systemImage: "person.2")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Compare your rankings against saved competitors")
+
+                    Button { showSuggest = true } label: {
+                        Label("Suggest", systemImage: "lightbulb")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Suggest keywords from Search Ads and competitor listings")
+
+                    if searchAdsCredentials != nil {
+                        Button(action: refreshPopularity) {
+                            Label {
+                                Text("Refresh Popularity")
+                            } icon: {
+                                if isRefreshing {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isRefreshing || filteredKeywords.isEmpty)
+                        .help("Fetch popularity scores from Apple Search Ads")
+                    }
+
+                    Button(action: checkRankings) {
+                        Label {
+                            Text("Check Rankings")
+                        } icon: {
+                            if isCheckingRankings {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "list.number")
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isCheckingRankings || filteredKeywords.isEmpty)
+                    .help("Check App Store search ranking positions via iTunes Search API")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             }
-            .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 
     private var keywordTable: some View {
@@ -249,7 +297,7 @@ struct KeywordsTabView: View {
                         .buttonStyle(.bordered)
                 }
                 if hasListingKeywords {
-                    Button("Import All Languages") { importAllLanguages() }
+                    Button("Import Languages…") { showImportLanguages = true }
                         .buttonStyle(.bordered)
                 }
                 Button("Add Keywords") { showAddKeyword = true }
@@ -274,10 +322,9 @@ struct KeywordsTabView: View {
         importMessage = importSummary(added: added, skipped: skipped, detail: source.locale)
     }
 
-    private func importAllLanguages() {
-        let sources = listingKeywordSources
+    private func importSelectedSources(_ sources: [(locale: String, country: String, terms: [String])]) {
         guard !sources.isEmpty else {
-            importMessage = "No listing keywords found. Sync the Listing tab first."
+            importMessage = "No languages selected."
             return
         }
 
@@ -376,7 +423,10 @@ struct KeywordsTabView: View {
         Task {
             defer { isCheckingRankings = false }
             do {
-                for keyword in filteredKeywords {
+                for (index, keyword) in filteredKeywords.enumerated() {
+                    if index > 0 {
+                        try await Task.sleep(nanoseconds: RankingChecker.batchDelayNanoseconds)
+                    }
                     let position = try await RankingChecker.shared.checkRanking(
                         bundleId: app.bundleId,
                         keyword: keyword.term,
@@ -391,6 +441,114 @@ struct KeywordsTabView: View {
                 asyncError = error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - Import Languages Sheet
+
+private struct ImportLanguagesSheet: View {
+    let sources: [(locale: String, country: String, terms: [String])]
+    let onImport: ([(locale: String, country: String, terms: [String])]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedLocales: Set<String>
+
+    init(
+        sources: [(locale: String, country: String, terms: [String])],
+        onImport: @escaping ([(locale: String, country: String, terms: [String])]) -> Void
+    ) {
+        self.sources = sources
+        self.onImport = onImport
+        _selectedLocales = State(initialValue: Set(sources.map(\.locale)))
+    }
+
+    private var allSelected: Bool { selectedLocales.count == sources.count }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Import Languages")
+                        .font(.headline)
+                    Text("Choose which locales to import keywords from")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(allSelected ? "Deselect All" : "Select All") {
+                    if allSelected {
+                        selectedLocales.removeAll()
+                    } else {
+                        selectedLocales = Set(sources.map(\.locale))
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(20)
+
+            Divider()
+
+            // Locale list
+            List(sources, id: \.locale) { source in
+                HStack(spacing: 12) {
+                    Image(systemName: selectedLocales.contains(source.locale)
+                          ? "checkmark.circle.fill"
+                          : "circle")
+                        .foregroundStyle(selectedLocales.contains(source.locale) ? .blue : .secondary)
+                        .font(.system(size: 18))
+                        .onTapGesture { toggle(source.locale) }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(localeName(source.locale))
+                            .font(.body)
+                        Text("\(source.country) · \(source.terms.count) keyword\(source.terms.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { toggle(source.locale) }
+                .padding(.vertical, 2)
+            }
+            .listStyle(.inset)
+
+            Divider()
+
+            // Footer
+            HStack {
+                Text("\(selectedLocales.count) of \(sources.count) selected")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Import") {
+                    let chosen = sources.filter { selectedLocales.contains($0.locale) }
+                    dismiss()
+                    onImport(chosen)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedLocales.isEmpty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(minWidth: 400, minHeight: 360)
+    }
+
+    private func toggle(_ locale: String) {
+        if selectedLocales.contains(locale) {
+            selectedLocales.remove(locale)
+        } else {
+            selectedLocales.insert(locale)
+        }
+    }
+
+    private func localeName(_ locale: String) -> String {
+        Locale.current.localizedString(forIdentifier: locale) ?? locale
     }
 }
 

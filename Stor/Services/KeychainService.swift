@@ -1,10 +1,52 @@
 import Foundation
 import Security
 
-struct ASCCredentials: Codable {
+struct ASCCredentials: Codable, Identifiable, Hashable {
+    var id: UUID
+    var name: String
     let issuerId: String
     let keyId: String
     let privateKeyPEM: String
+
+    init(
+        id: UUID = UUID(),
+        name: String = "App Store Connect",
+        issuerId: String,
+        keyId: String,
+        privateKeyPEM: String
+    ) {
+        self.id = id
+        self.name = name
+        self.issuerId = issuerId
+        self.keyId = keyId
+        self.privateKeyPEM = privateKeyPEM
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "App Store Connect"
+        issuerId = try container.decode(String.self, forKey: .issuerId)
+        keyId = try container.decode(String.self, forKey: .keyId)
+        privateKeyPEM = try container.decode(String.self, forKey: .privateKeyPEM)
+    }
+
+    var shortKeyId: String {
+        keyId.count > 6 ? String(keyId.prefix(6)) + "…" : keyId
+    }
+}
+
+struct ASCAccountStore: Codable {
+    var accounts: [ASCCredentials]
+    var activeAccountId: UUID?
+
+    var active: ASCCredentials? {
+        if let activeAccountId,
+           let match = accounts.first(where: { $0.id == activeAccountId }) {
+            return match
+        }
+        return accounts.first
+    }
 }
 
 final class KeychainService {
@@ -13,20 +55,86 @@ final class KeychainService {
     private let service = "com.giusscos.Stor.asc-credentials"
     private let account = "asc-api-key"
 
+    // MARK: - Active credential (backwards-compatible)
+
     func save(_ credentials: ASCCredentials) throws {
-        let data = try JSONEncoder().encode(credentials)
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecValueData: data
-        ]
-        SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+        var store = (try? loadStore()) ?? ASCAccountStore(accounts: [], activeAccountId: nil)
+        if let index = store.accounts.firstIndex(where: {
+            $0.id == credentials.id || ($0.issuerId == credentials.issuerId && $0.keyId == credentials.keyId)
+        }) {
+            var updated = credentials
+            updated.id = store.accounts[index].id
+            store.accounts[index] = updated
+            store.activeAccountId = updated.id
+        } else {
+            store.accounts.append(credentials)
+            store.activeAccountId = credentials.id
+        }
+        try saveStore(store)
     }
 
     func load() throws -> ASCCredentials? {
+        try loadStore()?.active
+    }
+
+    func delete() throws {
+        try deleteKeychainItem()
+    }
+
+    // MARK: - Multi-account
+
+    func loadStore() throws -> ASCAccountStore? {
+        guard let data = try readKeychainData() else { return nil }
+
+        if let store = try? JSONDecoder().decode(ASCAccountStore.self, from: data),
+           !store.accounts.isEmpty || dataContainsAccountStore(data) {
+            return store.accounts.isEmpty ? nil : normalized(store)
+        }
+
+        // Legacy single-credential payload
+        if let legacy = try? JSONDecoder().decode(ASCCredentials.self, from: data) {
+            let store = ASCAccountStore(accounts: [legacy], activeAccountId: legacy.id)
+            try? saveStore(store)
+            return store
+        }
+
+        return nil
+    }
+
+    func saveStore(_ store: ASCAccountStore) throws {
+        let normalizedStore = normalized(store)
+        let data = try JSONEncoder().encode(normalizedStore)
+        try writeKeychainData(data)
+    }
+
+    func allAccounts() throws -> [ASCCredentials] {
+        try loadStore()?.accounts ?? []
+    }
+
+    func setActiveAccount(id: UUID) throws {
+        var store = try loadStore() ?? ASCAccountStore(accounts: [], activeAccountId: nil)
+        guard store.accounts.contains(where: { $0.id == id }) else { return }
+        store.activeAccountId = id
+        try saveStore(store)
+    }
+
+    func removeAccount(id: UUID) throws -> ASCCredentials? {
+        var store = try loadStore() ?? ASCAccountStore(accounts: [], activeAccountId: nil)
+        store.accounts.removeAll { $0.id == id }
+        if store.accounts.isEmpty {
+            try deleteKeychainItem()
+            return nil
+        }
+        if store.activeAccountId == id {
+            store.activeAccountId = store.accounts.first?.id
+        }
+        try saveStore(store)
+        return store.active
+    }
+
+    // MARK: - Keychain I/O
+
+    private func readKeychainData() throws -> Data? {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -40,10 +148,22 @@ final class KeychainService {
             if status == errSecItemNotFound { return nil }
             throw KeychainError.loadFailed(status)
         }
-        return try JSONDecoder().decode(ASCCredentials.self, from: data)
+        return data
     }
 
-    func delete() throws {
+    private func writeKeychainData(_ data: Data) throws {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: account,
+            kSecValueData: data
+        ]
+        SecItemDelete(query as CFDictionary)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+    }
+
+    private func deleteKeychainItem() throws {
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -53,6 +173,19 @@ final class KeychainService {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.deleteFailed(status)
         }
+    }
+
+    private func normalized(_ store: ASCAccountStore) -> ASCAccountStore {
+        var copy = store
+        if copy.activeAccountId == nil || !copy.accounts.contains(where: { $0.id == copy.activeAccountId }) {
+            copy.activeAccountId = copy.accounts.first?.id
+        }
+        return copy
+    }
+
+    private func dataContainsAccountStore(_ data: Data) -> Bool {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        return json["accounts"] != nil
     }
 }
 

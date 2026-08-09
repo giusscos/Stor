@@ -13,6 +13,8 @@ struct StorApp: App {
             LocalizedMetadata.self,
             TrackedKeyword.self,
             KeywordRanking.self,
+            CompetitorApp.self,
+            CompetitorKeywordRanking.self,
             ScreenshotTemplate.self
         ])
         .defaultSize(width: 1200, height: 750)

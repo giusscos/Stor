@@ -3,8 +3,28 @@ import SwiftUI
 struct OnboardingView: View {
     let onComplete: (ASCCredentials) -> Void
     @State private var showAPIKeySetup = false
+    @State private var existingAccounts: [ASCCredentials] = []
 
     var body: some View {
+        Group {
+            if showAPIKeySetup {
+                AddAPIKeyView(
+                    onSave: onComplete,
+                    onCancel: { showAPIKeySetup = false },
+                    existingAccounts: existingAccounts,
+                    initiallyShowForm: existingAccounts.isEmpty
+                )
+            } else {
+                welcomeContent
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            existingAccounts = (try? KeychainService.shared.allAccounts()) ?? []
+        }
+    }
+
+    private var welcomeContent: some View {
         VStack(spacing: 32) {
             Spacer()
 
@@ -24,29 +44,30 @@ struct OnboardingView: View {
             }
 
             VStack(spacing: 10) {
-                Button("Connect App Store Connect") {
+                Button(existingAccounts.isEmpty ? "Connect App Store Connect" : "Choose Account") {
                     showAPIKeySetup = true
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
+                .keyboardShortcut(.defaultAction)
 
-                Text("Requires an API key from App Store Connect → Users and Access → Keys")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text(
+                    existingAccounts.isEmpty
+                        ? "Requires an API key from App Store Connect → Users and Access → Keys"
+                        : "You have \(existingAccounts.count) saved account\(existingAccounts.count == 1 ? "" : "s")"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
 
             HStack(spacing: 20) {
                 featurePill(icon: "lock.shield.fill", label: "Keychain stored")
+                featurePill(icon: "person.2.fill", label: "Multi-account")
                 featurePill(icon: "network.slash", label: "No third-party relay")
-                featurePill(icon: "arrow.clockwise", label: "Direct Apple API")
             }
             .padding(.bottom, 32)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showAPIKeySetup) {
-            AddAPIKeyView(onSave: onComplete)
         }
     }
 
