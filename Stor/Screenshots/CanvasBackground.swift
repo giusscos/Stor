@@ -2,6 +2,44 @@ import SwiftUI
 import AppKit
 import Foundation
 
+// MARK: - Shape layer types
+
+enum ShapeKind: String, Codable, CaseIterable, Identifiable {
+    case rectangle, circle, triangle
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .rectangle: return "Rectangle"
+        case .circle: return "Circle"
+        case .triangle: return "Triangle"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .rectangle: return "square"
+        case .circle: return "circle"
+        case .triangle: return "triangle"
+        }
+    }
+}
+
+enum ShapeEffect: String, Codable, CaseIterable, Identifiable {
+    case none, blur, glass
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: return "None"
+        case .blur: return "Material"
+        case .glass: return "Glass"
+        }
+    }
+}
+
 // MARK: - Canvas background
 
 nonisolated enum CanvasBackgroundKind: String, Codable, CaseIterable, Identifiable, Sendable {
@@ -72,6 +110,26 @@ nonisolated struct CanvasBackground: Codable, Equatable, Sendable {
     var meshColors: [String]
     /// Row-major control points in unit space (0…1).
     var meshPoints: [MeshControlPoint]
+
+    static let shapeDefault = CanvasBackground(
+        kind: .linear,
+        solidHex: "#6366F1",
+        stops: [
+            GradientStop(hex: "#6366F1", location: 0),
+            GradientStop(hex: "#8B5CF6", location: 1)
+        ],
+        linearAngle: 135,
+        radialCenterX: 0.5,
+        radialCenterY: 0.35,
+        meshWidth: 3,
+        meshHeight: 3,
+        meshColors: [
+            "#6366F1", "#7C3AED", "#8B5CF6",
+            "#6366F1", "#A78BFA", "#7C3AED",
+            "#8B5CF6", "#6366F1", "#7C3AED"
+        ],
+        meshPoints: defaultMeshPoints(width: 3, height: 3)
+    )
 
     static let `default` = CanvasBackground(
         kind: .solid,
@@ -307,6 +365,79 @@ struct CanvasBackgroundFill: View {
             width: background.meshWidth,
             height: background.meshHeight
         ).map(\.simd)
+    }
+}
+
+// MARK: - Triangle shape
+
+struct TriangleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: rect.midX, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            p.closeSubpath()
+        }
+    }
+}
+
+// MARK: - Shape layer view
+
+struct ShapeLayerView: View {
+    let layer: ScreenshotLayer
+    let scale: CGFloat
+
+    private var cornerRadius: CGFloat { layer.shapeCornerRadiusPt * scale }
+
+    private var clipShape: AnyShape {
+        switch layer.shapeKind {
+        case .rectangle: AnyShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        case .circle:    AnyShape(Circle())
+        case .triangle:  AnyShape(TriangleShape())
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            fillView
+            if layer.shapeStrokeWidth > 0 {
+                clipShape.stroke(
+                    Color(hex: layer.shapeStrokeColorHex),
+                    lineWidth: layer.shapeStrokeWidth * scale
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fillView: some View {
+        let fill = layer.resolvedShapeFill
+        let shape = clipShape
+        switch layer.shapeEffect {
+        case .none:
+            CanvasBackgroundFill(background: fill)
+                .clipShape(shape)
+                .opacity(layer.shapeOpacity)
+        case .blur:
+            ZStack {
+                Color.clear
+                    .background(.regularMaterial)
+                    .clipShape(shape)
+                CanvasBackgroundFill(background: fill)
+                    .clipShape(shape)
+                    .opacity(layer.shapeOpacity)
+            }
+        case .glass:
+            Color.clear
+                .glassEffect(.regular.tint(glassTint(from: fill)), in: shape)
+        }
+    }
+
+    private func glassTint(from fill: CanvasBackground) -> Color {
+        let hex = fill.kind == .solid
+            ? fill.solidHex
+            : fill.sortedStops.first?.hex ?? fill.solidHex
+        return Color(hex: hex).opacity(layer.shapeOpacity)
     }
 }
 

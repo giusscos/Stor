@@ -307,16 +307,67 @@ struct TemplateEditorView: View {
                                 }
                             }
 
-                            HStack(spacing: 8) {
-                                Button { addTextLayer() } label: {
-                                    Label("Text", systemImage: "textformat")
-                                        .frame(maxWidth: .infinity)
+                            if selectedLayerId != nil && template.layers.count > 1 {
+                                HStack(spacing: 4) {
+                                    Button {
+                                        moveSelectedLayerToEdge(front: false)
+                                    } label: {
+                                        Image(systemName: "arrow.down.to.line")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .disabled(!(selectedLayerIndex.map { $0 > 0 } ?? false))
+                                    .help("Send to Back")
+
+                                    Button {
+                                        moveSelectedLayer(by: -1)
+                                    } label: {
+                                        Image(systemName: "arrow.down")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .disabled(!(selectedLayerIndex.map { $0 > 0 } ?? false))
+                                    .help("Send Backward")
+
+                                    Button {
+                                        moveSelectedLayer(by: 1)
+                                    } label: {
+                                        Image(systemName: "arrow.up")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .disabled(!(selectedLayerIndex.map { $0 < template.layers.count - 1 } ?? false))
+                                    .help("Bring Forward")
+
+                                    Button {
+                                        moveSelectedLayerToEdge(front: true)
+                                    } label: {
+                                        Image(systemName: "arrow.up.to.line")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .disabled(!(selectedLayerIndex.map { $0 < template.layers.count - 1 } ?? false))
+                                    .help("Bring to Front")
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
+                            }
 
-                                Button { showAddImage = true } label: {
-                                    Label("Image", systemImage: "photo")
+                            VStack(spacing: 6) {
+                                HStack(spacing: 8) {
+                                    Button { addTextLayer() } label: {
+                                        Label("Text", systemImage: "textformat")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    Button { showAddImage = true } label: {
+                                        Label("Image", systemImage: "photo")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                }
+
+                                Button { addShapeLayer() } label: {
+                                    Label("Shape", systemImage: "square.on.circle")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.bordered)
@@ -359,6 +410,18 @@ struct TemplateEditorView: View {
             newLayer.heightFraction = 0.4
             newLayer.yFraction = 0.3
             ImageLayerStyleStore.shared.applyDefault(to: &newLayer)
+            template.layers.append(newLayer)
+            selectedLayerId = newLayer.id
+        }
+    }
+
+    private func addShapeLayer() {
+        mutate("Add Shape Layer") {
+            var newLayer = ScreenshotLayer(type: .shape)
+            newLayer.widthFraction = 0.5
+            newLayer.heightFraction = 0.3
+            newLayer.xFraction = 0.25
+            newLayer.yFraction = max(0, 0.1 + Double(template.layers.count) * 0.04)
             template.layers.append(newLayer)
             selectedLayerId = newLayer.id
         }

@@ -18,7 +18,7 @@ struct LayerListRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: layer.type == .text ? "textformat" : "photo")
+            Image(systemName: layer.type == .text ? "textformat" : layer.type == .shape ? layer.shapeKind.systemImage : "photo")
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 16)
 
@@ -456,6 +456,77 @@ struct LayerPropertiesView: View {
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Presets store frame, fill, radius, and content scale/offset.")
+                }
+            }
+
+            if layer.type == .shape {
+                InspectorSection(title: "Shape") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        InspectorLabeledRow("Kind") {
+                            Picker("", selection: Binding(
+                                get: { layer.shapeKind },
+                                set: { layer.shapeKind = $0 }
+                            )) {
+                                ForEach(ShapeKind.allCases) { kind in
+                                    Label(kind.title, systemImage: kind.systemImage).tag(kind)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        if layer.shapeKind == .rectangle {
+                            BufferedValueSlider(
+                                title: "Radius",
+                                value: Binding(get: { layer.shapeCornerRadiusPt }, set: { layer.shapeCornerRadiusPt = $0 }),
+                                range: 0...200,
+                                onLiveChange: liveUpdate(\.shapeCornerRadiusPt),
+                                onEditEnd: endLivePreview
+                            )
+                        }
+
+                        BufferedPercentSlider(
+                            title: "Opacity",
+                            value: Binding(get: { layer.shapeOpacity }, set: { layer.shapeOpacity = $0 }),
+                            range: 0...1,
+                            onLiveChange: liveUpdate(\.shapeOpacity),
+                            onEditEnd: endLivePreview
+                        )
+
+                        Divider()
+
+                        Text("Stroke")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        BufferedValueSlider(
+                            title: "Width",
+                            value: Binding(get: { layer.shapeStrokeWidth }, set: { layer.shapeStrokeWidth = $0 }),
+                            range: 0...20,
+                            onLiveChange: liveUpdate(\.shapeStrokeWidth),
+                            onEditEnd: endLivePreview
+                        )
+
+                        InspectorLabeledRow("Color") {
+                            ColorPicker("", selection: Binding(
+                                get: { Color(hex: layer.shapeStrokeColorHex) },
+                                set: { layer.shapeStrokeColorHex = $0.toHex() }
+                            ))
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }
+                }
+
+                InspectorSection(title: "Fill") {
+                    BackgroundInspector(
+                        background: Binding(
+                            get: { layer.resolvedShapeFill },
+                            set: { layer.shapeFill = $0 }
+                        ),
+                        title: nil
+                    )
                 }
             }
 

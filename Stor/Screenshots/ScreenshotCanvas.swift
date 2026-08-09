@@ -16,6 +16,7 @@ struct ScreenshotCanvas: View {
     @State private var dragStart: [UUID: CGPoint] = [:]
     @State private var dragOverride: (id: UUID, x: Double, y: Double)?
     @State private var isDropTargeted = false
+    @State private var hoveredLayerId: UUID?
 
     var body: some View {
         GeometryReader { geo in
@@ -25,13 +26,16 @@ struct ScreenshotCanvas: View {
                 ForEach(template.layers.filter { $0.isVisible }) { layer in
                     layerView(layer, in: geo.size)
                         .overlay {
-                            if isInteractive, layer.id == selectedLayerId {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .stroke(Color.accentColor, lineWidth: 1.5)
+                            if isInteractive {
+                                selectionOverlay(for: layer.id)
                             }
                         }
                         .onTapGesture { selectedLayerId = layer.id }
                         .gesture(layerDragGesture(layer, in: geo.size))
+                        .onHover { hovering in
+                            guard isInteractive else { return }
+                            hoveredLayerId = hovering ? layer.id : nil
+                        }
                 }
 
                 if isDropTargeted {
@@ -50,6 +54,41 @@ struct ScreenshotCanvas: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .allowsHitTesting(isInteractive)
+    }
+
+    @ViewBuilder
+    private func selectionOverlay(for id: UUID) -> some View {
+        let isSelected = id == selectedLayerId
+        let isHovered = id == hoveredLayerId && !isSelected
+
+        if isSelected {
+            ZStack {
+                RoundedRectangle(cornerRadius: 2)
+                    .stroke(Color.accentColor, lineWidth: 1.5)
+                GeometryReader { proxy in
+                    let w = proxy.size.width
+                    let h = proxy.size.height
+                    ZStack {
+                        selectionHandle.position(x: 0, y: 0)
+                        selectionHandle.position(x: w, y: 0)
+                        selectionHandle.position(x: 0, y: h)
+                        selectionHandle.position(x: w, y: h)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+        } else if isHovered {
+            RoundedRectangle(cornerRadius: 2)
+                .stroke(Color.accentColor.opacity(0.5), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var selectionHandle: some View {
+        Rectangle()
+            .fill(Color.white)
+            .frame(width: 6, height: 6)
+            .overlay(Rectangle().stroke(Color.accentColor, lineWidth: 1.5))
     }
 
     private func layerDragGesture(_ layer: ScreenshotLayer, in size: CGSize) -> some Gesture {
@@ -120,6 +159,7 @@ struct ScreenshotCanvas: View {
                         .fill(Color(hex: bgHex))
                 }
             }
+            .contentShape(Rectangle())
             .position(x: x + w / 2, y: y + h / 2)
 
         case .image:
@@ -156,6 +196,11 @@ struct ScreenshotCanvas: View {
                 .frame(width: w, height: h)
                 .position(x: x + w / 2, y: y + h / 2)
             }
+
+        case .shape:
+            ShapeLayerView(layer: effective, scale: scale)
+                .frame(width: w, height: h)
+                .position(x: x + w / 2, y: y + h / 2)
         }
     }
 

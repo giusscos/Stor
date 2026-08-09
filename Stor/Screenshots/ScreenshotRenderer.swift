@@ -86,6 +86,16 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
                     frameImg.draw(in: ScreenshotLayer.deviceFrameRect(frameSize: frameImg.size, in: rect))
                 }
             }
+
+        case .shape:
+            let shapeView = ShapeLayerView(layer: layer, scale: exportScale)
+                .frame(width: rect.width, height: rect.height)
+            let shapeRenderer = ImageRenderer(content: shapeView)
+            shapeRenderer.proposedSize = ProposedViewSize(width: rect.width, height: rect.height)
+            shapeRenderer.scale = 1
+            if let shapeImage = shapeRenderer.nsImage {
+                shapeImage.draw(in: rect)
+            }
         }
     }
 

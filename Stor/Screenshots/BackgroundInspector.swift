@@ -3,12 +3,15 @@ import SwiftUI
 
 struct BackgroundInspector: View {
     @Binding var background: CanvasBackground
+    var title: String? = "Background"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Background")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            if let title {
+                Text(title)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
 
             // Live preview
             CanvasBackgroundFill(background: background)

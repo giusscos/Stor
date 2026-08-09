@@ -166,6 +166,16 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     /// Cleared by `ScreenshotLayer.migrateEmbeddedImages` and never re-encoded.
     private var embeddedImageData: Data?
 
+    // Shape layer
+    var shapeKindRaw: String
+    var shapeEffectRaw: String
+    var shapeFill: CanvasBackground?
+    var shapeCornerRadiusPt: Double
+    var shapeBlurRadius: Double
+    var shapeOpacity: Double
+    var shapeStrokeColorHex: String
+    var shapeStrokeWidth: Double
+
     /// Image bytes for this layer, resolved through the store.
     var imageData: Data? {
         get {
@@ -192,6 +202,20 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
 
     var hasImage: Bool { imageRef != nil || embeddedImageData != nil }
 
+    var shapeKind: ShapeKind {
+        get { ShapeKind(rawValue: shapeKindRaw) ?? .rectangle }
+        set { shapeKindRaw = newValue.rawValue }
+    }
+
+    var shapeEffect: ShapeEffect {
+        get { ShapeEffect(rawValue: shapeEffectRaw) ?? .none }
+        set { shapeEffectRaw = newValue.rawValue }
+    }
+
+    var resolvedShapeFill: CanvasBackground {
+        shapeFill ?? CanvasBackground.shapeDefault
+    }
+
     /// Moves any legacy inline image bytes into the store. Returns true when something
     /// changed, so the caller knows to persist the slimmed-down JSON.
     static func migrateEmbeddedImages(in layers: inout [ScreenshotLayer]) -> Bool {
@@ -206,7 +230,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     }
 
     enum LayerType: String, Codable {
-        case text, image
+        case text, image, shape
     }
 
     var fontWeight: LayerFontWeight {
@@ -281,6 +305,14 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         self.fitHeightToContent = false
         self.imageRef = nil
         self.embeddedImageData = nil
+        self.shapeKindRaw = ShapeKind.rectangle.rawValue
+        self.shapeEffectRaw = ShapeEffect.none.rawValue
+        self.shapeFill = type == .shape ? CanvasBackground.shapeDefault : nil
+        self.shapeCornerRadiusPt = 20
+        self.shapeBlurRadius = 10
+        self.shapeOpacity = 1.0
+        self.shapeStrokeColorHex = "#FFFFFF"
+        self.shapeStrokeWidth = type == .shape ? 2.0 : 0
     }
 
     /// Label shown in the layers list: custom name when set, otherwise text preview or "Image".
@@ -293,6 +325,8 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
             return plainPreviewLabel(for: previewLocale)
         case .image:
             return "Image"
+        case .shape:
+            return shapeKind.title
         }
     }
 
@@ -316,6 +350,8 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         case imageRef
         /// Legacy key: inline bytes from templates saved before the image store existed.
         case imageData
+        case shapeKindRaw, shapeEffectRaw, shapeFill, shapeCornerRadiusPt, shapeBlurRadius, shapeOpacity
+        case shapeStrokeColorHex, shapeStrokeWidth
     }
 
     init(from decoder: Decoder) throws {
@@ -356,6 +392,14 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         embeddedImageData = imageRef == nil
             ? try c.decodeIfPresent(Data.self, forKey: .imageData)
             : nil
+        shapeKindRaw = try c.decodeIfPresent(String.self, forKey: .shapeKindRaw) ?? ShapeKind.rectangle.rawValue
+        shapeEffectRaw = try c.decodeIfPresent(String.self, forKey: .shapeEffectRaw) ?? ShapeEffect.none.rawValue
+        shapeFill = try c.decodeIfPresent(CanvasBackground.self, forKey: .shapeFill)
+        shapeCornerRadiusPt = try c.decodeIfPresent(Double.self, forKey: .shapeCornerRadiusPt) ?? 20
+        shapeBlurRadius = try c.decodeIfPresent(Double.self, forKey: .shapeBlurRadius) ?? 10
+        shapeOpacity = try c.decodeIfPresent(Double.self, forKey: .shapeOpacity) ?? 1.0
+        shapeStrokeColorHex = try c.decodeIfPresent(String.self, forKey: .shapeStrokeColorHex) ?? "#FFFFFF"
+        shapeStrokeWidth = try c.decodeIfPresent(Double.self, forKey: .shapeStrokeWidth) ?? 0
     }
 
     /// Written explicitly so the legacy `imageData` key is never re-emitted.
@@ -392,6 +436,14 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         try c.encode(fitWidthToContent, forKey: .fitWidthToContent)
         try c.encode(fitHeightToContent, forKey: .fitHeightToContent)
         try c.encodeIfPresent(imageRef, forKey: .imageRef)
+        try c.encode(shapeKindRaw, forKey: .shapeKindRaw)
+        try c.encode(shapeEffectRaw, forKey: .shapeEffectRaw)
+        try c.encodeIfPresent(shapeFill, forKey: .shapeFill)
+        try c.encode(shapeCornerRadiusPt, forKey: .shapeCornerRadiusPt)
+        try c.encode(shapeBlurRadius, forKey: .shapeBlurRadius)
+        try c.encode(shapeOpacity, forKey: .shapeOpacity)
+        try c.encode(shapeStrokeColorHex, forKey: .shapeStrokeColorHex)
+        try c.encode(shapeStrokeWidth, forKey: .shapeStrokeWidth)
     }
 }
 
@@ -685,24 +737,41 @@ final class ScreenshotTemplate {
 // MARK: - Color hex helpers
 
 extension Color {
+    /// Parses #RRGGBB (6-char) or #RRGGBBAA (8-char) hex strings.
     init(hex: String) {
         let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         var value: UInt64 = 0
         Scanner(string: hex).scanHexInt64(&value)
-        let r, g, b: UInt64
         switch hex.count {
-        case 6:  (r, g, b) = (value >> 16, value >> 8 & 0xFF, value & 0xFF)
-        default: (r, g, b) = (0, 0, 0)
+        case 8:
+            self.init(
+                red:     Double((value >> 24) & 0xFF) / 255,
+                green:   Double((value >> 16) & 0xFF) / 255,
+                blue:    Double((value >>  8) & 0xFF) / 255,
+                opacity: Double( value        & 0xFF) / 255
+            )
+        case 6:
+            self.init(
+                red:   Double((value >> 16) & 0xFF) / 255,
+                green: Double((value >>  8) & 0xFF) / 255,
+                blue:  Double( value        & 0xFF) / 255
+            )
+        default:
+            self.init(red: 0, green: 0, blue: 0)
         }
-        self.init(red: Double(r) / 255, green: Double(g) / 255, blue: Double(b) / 255)
     }
 
+    /// Returns #RRGGBB for fully-opaque colors, #RRGGBBAA when alpha < 1.
     func toHex() -> String {
         guard let components = NSColor(self).usingColorSpace(.sRGB)?.cgColor.components,
               components.count >= 3 else { return "#000000" }
-        return String(format: "#%02X%02X%02X",
-                      Int(components[0] * 255),
-                      Int(components[1] * 255),
-                      Int(components[2] * 255))
+        let r = Int((components[0] * 255).rounded())
+        let g = Int((components[1] * 255).rounded())
+        let b = Int((components[2] * 255).rounded())
+        let a = components.count >= 4 ? Int((components[3] * 255).rounded()) : 255
+        if a >= 255 {
+            return String(format: "#%02X%02X%02X", r, g, b)
+        }
+        return String(format: "#%02X%02X%02X%02X", r, g, b, a)
     }
 }
