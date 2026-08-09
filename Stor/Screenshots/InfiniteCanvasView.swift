@@ -55,13 +55,17 @@ struct InfiniteCanvasView<Content: View>: NSViewRepresentable {
         view.minMagnification = minMagnification
         view.maxMagnification = maxMagnification
 
-        if let hosting = context.coordinator.hostingView as? NSHostingView<Content> {
-            hosting.rootView = content
-            view.invalidateContentSize()
-        } else {
-            let hosting = NSHostingView(rootView: content)
-            view.installContent(hosting)
-            context.coordinator.hostingView = hosting
+        // Skip content update when SwiftUI is reacting to a magnification change we
+        // originated from AppKit — the canvas content hasn't changed, only the zoom level.
+        if !context.coordinator.isUpdatingFromAppKit {
+            if let hosting = context.coordinator.hostingView as? NSHostingView<Content> {
+                hosting.rootView = content
+                view.invalidateContentSize()
+            } else {
+                let hosting = NSHostingView(rootView: content)
+                view.installContent(hosting)
+                context.coordinator.hostingView = hosting
+            }
         }
 
         if centerRequest != context.coordinator.lastCenterRequest {

@@ -416,8 +416,33 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
                 attributed.draw(in: textRect)
             }
         case .image:
-            if let data = layer.imageData, let img = NSImage(data: data) {
-                img.draw(in: rect)
+            if let data = layer.imageData,
+               let img = ImageCache.shared.image(for: data, id: layer.id) {
+                let radius = layer.imageCornerRadius
+                // Compute the draw rect: fill crops to rect, fit letterboxes centered.
+                let drawRect: CGRect
+                if layer.imageFills {
+                    drawRect = rect
+                } else {
+                    let iw = img.size.width, ih = img.size.height
+                    let scale = max(rect.width / iw, rect.height / ih)
+                    let fw = iw * scale, fh = ih * scale
+                    drawRect = CGRect(
+                        x: rect.midX - fw / 2, y: rect.midY - fh / 2, width: fw, height: fh
+                    )
+                }
+                if radius > 0 {
+                    NSGraphicsContext.saveGraphicsState()
+                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).setClip()
+                    img.draw(in: drawRect)
+                    NSGraphicsContext.restoreGraphicsState()
+                } else {
+                    img.draw(in: drawRect)
+                }
+                if let assetName = layer.frameAssetName,
+                   let frameImg = NSImage(named: assetName) {
+                    frameImg.draw(in: rect)
+                }
             }
         }
     }
@@ -451,6 +476,7 @@ private struct TemplateSidebarRow: View {
     private var deviceIcon: String {
         switch template.deviceType {
         case .iPadPro13: return "ipad"
+        case .macBook: return "laptopcomputer"
         default: return "iphone"
         }
     }
@@ -800,6 +826,8 @@ private struct ScreenshotCanvas: View {
     var previewLocale: String? = nil
     var isInteractive: Bool = true
     @State private var dragStart: [UUID: CGPoint] = [:]
+    @State private var dragOverride: (id: UUID, x: Double, y: Double)?
+    @State private var isDropTargeted = false
 
     var body: some View {
         GeometryReader { geo in
@@ -817,6 +845,19 @@ private struct ScreenshotCanvas: View {
                         .onTapGesture { selectedLayerId = layer.id }
                         .gesture(layerDragGesture(layer, in: geo.size))
                 }
+
+                if isDropTargeted {
+                    Color.accentColor.opacity(0.08)
+                        .allowsHitTesting(false)
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                        .allowsHitTesting(false)
+                }
+            }
+            .onDrop(of: [.fileURL, .image], isTargeted: $isDropTargeted) { providers, location in
+                guard isInteractive else { return false }
+                handleDrop(providers: providers, at: location, canvasSize: geo.size)
+                return true
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -826,23 +867,23 @@ private struct ScreenshotCanvas: View {
     private func layerDragGesture(_ layer: ScreenshotLayer, in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 2)
             .onChanged { value in
-                // Capture initial fraction once at drag start
                 if dragStart[layer.id] == nil {
                     dragStart[layer.id] = CGPoint(x: layer.xFraction, y: layer.yFraction)
                 }
-                guard let start = dragStart[layer.id],
-                      let idx = template.layers.firstIndex(where: { $0.id == layer.id })
-                else { return }
-                // translation is always relative to drag origin, so arithmetic is stable
-                let newX = start.x + value.translation.width / size.width
-                let newY = start.y + value.translation.height / size.height
-                // Single read-modify-write to avoid a double JSON encode/decode.
-                var layers = template.layers
-                layers[idx].xFraction = max(0, min(0.95, newX))
-                layers[idx].yFraction = max(0, min(0.95, newY))
-                template.layers = layers
+                guard let start = dragStart[layer.id] else { return }
+                let newX = max(-0.5, min(0.95, start.x + value.translation.width / size.width))
+                let newY = max(0, min(0.95, start.y + value.translation.height / size.height))
+                dragOverride = (id: layer.id, x: newX, y: newY)
             }
             .onEnded { _ in
+                if let o = dragOverride, o.id == layer.id,
+                   let idx = template.layers.firstIndex(where: { $0.id == layer.id }) {
+                    var layers = template.layers
+                    layers[idx].xFraction = o.x
+                    layers[idx].yFraction = o.y
+                    template.layers = layers
+                }
+                dragOverride = nil
                 dragStart.removeValue(forKey: layer.id)
                 selectedLayerId = layer.id
             }
@@ -850,8 +891,14 @@ private struct ScreenshotCanvas: View {
 
     @ViewBuilder
     private func layerView(_ layer: ScreenshotLayer, in size: CGSize) -> some View {
+        let effective: ScreenshotLayer = {
+            if let o = dragOverride, o.id == layer.id {
+                var c = layer; c.xFraction = o.x; c.yFraction = o.y; return c
+            }
+            return layer
+        }()
         let scale = size.width / 375
-        let frame = layer.resolvedFrame(in: size, locale: previewLocale, fontScale: scale)
+        let frame = effective.resolvedFrame(in: size, locale: previewLocale, fontScale: scale)
         let w = frame.width
         let h = frame.height
         let x = frame.minX
@@ -881,14 +928,53 @@ private struct ScreenshotCanvas: View {
             .position(x: x + w / 2, y: y + h / 2)
 
         case .image:
-            if let data = layer.imageData, let img = NSImage(data: data) {
-                Image(nsImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: w, height: h)
-                    .position(x: x + w / 2, y: y + h / 2)
+            if let data = layer.imageData,
+               let img = ImageCache.shared.image(for: data, id: effective.id) {
+                let cornerRadius = layer.imageCornerRadius * scale
+                let contentMode: ContentMode = layer.imageFills ? .fill : .fit
+                ZStack {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: contentMode)
+                        .frame(width: w, height: h)
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+
+                    if let assetName = layer.frameAssetName,
+                       let frameImg = NSImage(named: assetName) {
+                        Image(nsImage: frameImg)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: w, height: h)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(width: w, height: h)
+                .position(x: x + w / 2, y: y + h / 2)
             }
         }
+    }
+
+    private func handleDrop(providers: [NSItemProvider], at location: CGPoint, canvasSize: CGSize) {
+        guard let provider = providers.first else { return }
+        let xFrac = max(0, min(0.25, location.x / canvasSize.width - 0.35))
+        let yFrac = max(0, min(0.45, location.y / canvasSize.height - 0.25))
+
+        provider.loadObject(ofClass: NSImage.self) { object, _ in
+            guard let image = object as? NSImage,
+                  let tiff = image.tiffRepresentation else { return }
+            DispatchQueue.main.async { self.insertImageLayer(data: tiff, xFrac: xFrac, yFrac: yFrac) }
+        }
+    }
+
+    private func insertImageLayer(data: Data, xFrac: Double, yFrac: Double) {
+        var newLayer = ScreenshotLayer(type: .image)
+        newLayer.imageData = data
+        newLayer.widthFraction = 0.7
+        newLayer.heightFraction = 0.5
+        newLayer.xFraction = xFrac
+        newLayer.yFraction = yFrac
+        template.layers.append(newLayer)
+        selectedLayerId = newLayer.id
     }
 }
 
@@ -992,7 +1078,7 @@ private struct ScreenshotGalleryView: View {
 
     private func galleryCard(_ template: ScreenshotTemplate) -> some View {
         let isSelected = selectedTemplate?.persistentModelID == template.persistentModelID
-        let cardWidth: CGFloat = template.deviceType == .iPadPro13 ? 220 : 180
+        let cardWidth: CGFloat = template.deviceType == .macBook ? 260 : template.deviceType == .iPadPro13 ? 220 : 180
         let cardHeight = cardWidth / template.deviceType.aspectRatio
 
         return VStack(spacing: 10) {
@@ -1724,9 +1810,62 @@ private struct LayerPropertiesView: View {
                 }
             }
 
+            if layer.type == .image {
+                InspectorSection(title: "Image") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        InspectorLabeledRow("Frame") {
+                            Picker("", selection: Binding(
+                                get: { layer.frameAssetName },
+                                set: { layer.frameAssetName = $0 }
+                            )) {
+                                Text("None").tag(nil as String?)
+                                ForEach(DeviceFrameOption.orderedGroups, id: \.self) { group in
+                                    Section(group) {
+                                        ForEach(DeviceFrameOption.options(in: group)) { option in
+                                            Text(option.label).tag(option.assetName as String?)
+                                        }
+                                    }
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        Toggle("Fill frame", isOn: Binding(
+                            get: { layer.imageFills },
+                            set: { layer.imageFills = $0 }
+                        ))
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                        .help("Fill: image crops to fill the layer box. Uncheck to letterbox (fit).")
+
+                        BufferedValueSlider(
+                            title: "Radius",
+                            value: Binding(get: { layer.imageCornerRadius }, set: { layer.imageCornerRadius = $0 }),
+                            range: 0...120
+                        )
+
+                        if let assetName = layer.frameAssetName,
+                           let img = NSImage(named: assetName) {
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 80)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
+                                }
+                        }
+                    }
+                }
+            }
+
             InspectorSection(title: "Layout") {
                 VStack(alignment: .leading, spacing: 10) {
-                    layoutSlider("X", value: $layer.xFraction, range: 0...0.9)
+                    layoutSlider("X", value: $layer.xFraction, range: -0.5...0.95)
                     layoutSlider("Y", value: $layer.yFraction, range: 0...0.9)
 
                     if layer.type == .text {
@@ -1743,8 +1882,8 @@ private struct LayerPropertiesView: View {
                             fit: $layer.fitHeightToContent
                         )
                     } else {
-                        layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.0)
-                        layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.0)
+                        layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.5)
+                        layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.5)
                     }
 
                     Toggle("Visible", isOn: $layer.isVisible)
@@ -1828,13 +1967,7 @@ private struct LayerPropertiesView: View {
     }
 
     private func layoutSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        InspectorLabeledRow(title) {
-            Slider(value: value, in: range)
-            Text(String(format: "%.0f%%", value.wrappedValue * 100))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 36, alignment: .trailing)
-        }
+        BufferedPercentSlider(title: title, value: value, range: range)
     }
 
     private func layoutFitSlider(
@@ -1869,6 +2002,60 @@ private struct LayerPropertiesView: View {
             return .system(.body, design: ScreenshotFontFamily.design(for: family))
         }
         return .custom(family, size: NSFont.systemFontSize)
+    }
+}
+
+// MARK: - Buffered sliders (no model writes during drag)
+
+/// Percent-formatted slider (0.0–1.5 → "0%–150%") that only commits to the model on drag end.
+/// Eliminates per-frame SwiftUI canvas re-renders while the thumb is moving.
+private struct BufferedPercentSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    @State private var local: Double = 0
+    @State private var dragging = false
+
+    var body: some View {
+        InspectorLabeledRow(title) {
+            Slider(value: $local, in: range) { editing in
+                dragging = editing
+                if !editing { value = local }
+            }
+            Text(String(format: "%.0f%%", local * 100))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .trailing)
+        }
+        .onAppear { local = value }
+        .onChange(of: value) { _, v in if !dragging { local = v } }
+    }
+}
+
+/// Plain numeric slider (e.g. corner radius 0–120) that only commits to the model on drag end.
+private struct BufferedValueSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 1
+
+    @State private var local: Double = 0
+    @State private var dragging = false
+
+    var body: some View {
+        InspectorLabeledRow(title) {
+            Slider(value: $local, in: range, step: step) { editing in
+                dragging = editing
+                if !editing { value = local }
+            }
+            Text("\(Int(local))")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 28, alignment: .trailing)
+        }
+        .onAppear { local = value }
+        .onChange(of: value) { _, v in if !dragging { local = v } }
     }
 }
 

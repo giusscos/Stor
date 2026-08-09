@@ -10,6 +10,7 @@ enum DeviceType: String, CaseIterable, Codable {
     case iPhone67 = "iPhone 6.7\""
     case iPhone65 = "iPhone 6.5\""
     case iPadPro13 = "iPad Pro 13\""
+    case macBook = "MacBook"
 
     var canvasSize: CGSize {
         switch self {
@@ -17,6 +18,7 @@ enum DeviceType: String, CaseIterable, Codable {
         case .iPhone67:  return CGSize(width: 1290, height: 2796)
         case .iPhone65:  return CGSize(width: 1284, height: 2778)
         case .iPadPro13: return CGSize(width: 2064, height: 2752)
+        case .macBook:   return CGSize(width: 2560, height: 1600)
         }
     }
 
@@ -28,8 +30,99 @@ enum DeviceType: String, CaseIterable, Codable {
         case .iPhone67:  return "APP_IPHONE_67"
         case .iPhone65:  return "APP_IPHONE_65"
         case .iPadPro13: return "APP_IPAD_PRO_3GEN_129"
+        case .macBook:   return "APP_MAC"
         }
     }
+
+}
+
+// MARK: - Device frame options
+
+struct DeviceFrameOption: Identifiable, Hashable {
+    var id: String { assetName }
+    let group: String
+    let label: String
+    let assetName: String
+
+    static let all: [DeviceFrameOption] = [
+        // iPhone 17 Pro Max
+        .init(group: "iPhone 17 Pro Max", label: "Cosmic Orange — Portrait",  assetName: "iPhone 17 Pro Max - Cosmic Orange - Portrait"),
+        .init(group: "iPhone 17 Pro Max", label: "Cosmic Orange — Landscape", assetName: "iPhone 17 Pro Max - Cosmic Orange - Landscape"),
+        .init(group: "iPhone 17 Pro Max", label: "Deep Blue — Portrait",      assetName: "iPhone 17 Pro Max - Deep Blue - Portrait"),
+        .init(group: "iPhone 17 Pro Max", label: "Deep Blue — Landscape",     assetName: "iPhone 17 Pro Max - Deep Blue - Landscape"),
+        .init(group: "iPhone 17 Pro Max", label: "Silver — Portrait",         assetName: "iPhone 17 Pro Max - Silver - Portrait"),
+        .init(group: "iPhone 17 Pro Max", label: "Silver — Landscape",        assetName: "iPhone 17 Pro Max - Silver - Landscape"),
+        // iPhone 17 Pro
+        .init(group: "iPhone 17 Pro", label: "Cosmic Orange — Portrait",  assetName: "iPhone 17 Pro - Cosmic Orange - Portrait"),
+        .init(group: "iPhone 17 Pro", label: "Cosmic Orange — Landscape", assetName: "iPhone 17 Pro - Cosmic Orange - Landscape"),
+        .init(group: "iPhone 17 Pro", label: "Deep Blue — Portrait",      assetName: "iPhone 17 Pro - Deep Blue - Portrait"),
+        .init(group: "iPhone 17 Pro", label: "Deep Blue — Landscape",     assetName: "iPhone 17 Pro - Deep Blue - Landscape"),
+        .init(group: "iPhone 17 Pro", label: "Silver — Portrait",         assetName: "iPhone 17 Pro - Silver - Portrait"),
+        .init(group: "iPhone 17 Pro", label: "Silver — Landscape",        assetName: "iPhone 17 Pro - Silver - Landscape"),
+        // iPhone Air
+        .init(group: "iPhone Air", label: "Cloud White — Portrait",  assetName: "iPhone Air - Cloud White - Portrait"),
+        .init(group: "iPhone Air", label: "Cloud White — Landscape", assetName: "iPhone Air - Cloud White - Landscape"),
+        .init(group: "iPhone Air", label: "Light Gold — Portrait",   assetName: "iPhone Air - Light Gold - Portrait"),
+        .init(group: "iPhone Air", label: "Light Gold — Landscape",  assetName: "iPhone Air - Light Gold - Landscape"),
+        .init(group: "iPhone Air", label: "Sky Blue — Portrait",     assetName: "iPhone Air - Sky Blue - Portrait"),
+        .init(group: "iPhone Air", label: "Sky Blue — Landscape",    assetName: "iPhone Air - Sky Blue - Landscape"),
+        .init(group: "iPhone Air", label: "Space Black — Portrait",  assetName: "iPhone Air - Space Black - Portrait"),
+        .init(group: "iPhone Air", label: "Space Black — Landscape", assetName: "iPhone Air - Space Black - Landscape"),
+        // iPhone 17
+        .init(group: "iPhone 17", label: "Black — Portrait",      assetName: "iPhone 17 - Black - Portrait"),
+        .init(group: "iPhone 17", label: "Black — Landscape",     assetName: "iPhone 17 - Black - Landscape"),
+        .init(group: "iPhone 17", label: "Lavender — Portrait",   assetName: "iPhone 17 - Lavender - Portrait"),
+        .init(group: "iPhone 17", label: "Lavender — Landscape",  assetName: "iPhone 17 - Lavender - Landscape"),
+        .init(group: "iPhone 17", label: "Mist Blue — Portrait",  assetName: "iPhone 17 - Mist Blue - Portrait"),
+        .init(group: "iPhone 17", label: "Mist Blue — Landscape", assetName: "iPhone 17 - Mist Blue - Landscape"),
+        .init(group: "iPhone 17", label: "Sage — Portrait",       assetName: "iPhone 17 - Sage - Portrait"),
+        .init(group: "iPhone 17", label: "Sage — Landscape",      assetName: "iPhone 17 - Sage - Landscape"),
+        .init(group: "iPhone 17", label: "White — Portrait",      assetName: "iPhone 17 - White - Portrait"),
+        .init(group: "iPhone 17", label: "White — Landscape",     assetName: "iPhone 17 - White - Landscape"),
+        // iPad Pro (M5) 13"
+        .init(group: "iPad Pro (M5) 13\"", label: "Silver — Portrait",       assetName: "iPad Pro (M5) 13\" - Silver - Portrait"),
+        .init(group: "iPad Pro (M5) 13\"", label: "Silver — Landscape",      assetName: "iPad Pro (M5) 13\" - Silver - Landscape"),
+        .init(group: "iPad Pro (M5) 13\"", label: "Space Black — Portrait",  assetName: "iPad Pro (M5) 13\" - Space Black - Portrait"),
+        .init(group: "iPad Pro (M5) 13\"", label: "Space Black — Landscape", assetName: "iPad Pro (M5) 13\" - Space Black - Landscape"),
+        // iPad Pro (M5) 11"
+        .init(group: "iPad Pro (M5) 11\"", label: "Silver — Portrait",       assetName: "iPad Pro (M5) 11\" - Silver - Portrait"),
+        .init(group: "iPad Pro (M5) 11\"", label: "Silver — Landscape",      assetName: "iPad Pro (M5) 11\" - Silver - Landscape"),
+        .init(group: "iPad Pro (M5) 11\"", label: "Space Black — Portrait",  assetName: "iPad Pro (M5) 11\" - Space Black - Portrait"),
+        .init(group: "iPad Pro (M5) 11\"", label: "Space Black — Landscape", assetName: "iPad Pro (M5) 11\" - Space Black - Landscape"),
+        // MacBook Pro M5 14-inch
+        .init(group: "MacBook Pro M5 14\"", label: "Silver",      assetName: "MacBook Pro M5 14-inch Silver"),
+        .init(group: "MacBook Pro M5 14\"", label: "Space Black", assetName: "MacBook Pro M5 14-inch Space Black"),
+        // MacBook Pro M5 16-inch
+        .init(group: "MacBook Pro M5 16\"", label: "Silver",      assetName: "MacBook Pro M5 16-inch Silver"),
+        .init(group: "MacBook Pro M5 16\"", label: "Space Black", assetName: "MacBook Pro M5 16-inch Space Black"),
+    ]
+
+    static var orderedGroups: [String] {
+        var seen = Set<String>()
+        return all.compactMap { seen.insert($0.group).inserted ? $0.group : nil }
+    }
+
+    static func options(in group: String) -> [DeviceFrameOption] {
+        all.filter { $0.group == group }
+    }
+}
+
+// MARK: - Image cache
+
+/// Caches decoded NSImage objects so NSImage(data:) is only called once per unique image payload.
+@MainActor
+final class ImageCache {
+    static let shared = ImageCache()
+    private var store: [UUID: (count: Int, image: NSImage)] = [:]
+
+    func image(for data: Data, id: UUID) -> NSImage? {
+        if let entry = store[id], entry.count == data.count { return entry.image }
+        guard let img = NSImage(data: data) else { return nil }
+        store[id] = (data.count, img)
+        return img
+    }
+
+    func invalidate(_ id: UUID) { store.removeValue(forKey: id) }
 }
 
 // MARK: - Layer model
@@ -42,6 +135,10 @@ struct ScreenshotLayer: Codable, Identifiable {
     var widthFraction: Double
     var heightFraction: Double
     var isVisible: Bool
+    var frameAssetName: String?
+    var imageCornerRadius: Double
+    /// When true, image scales to fill the layer bounds (cropping if needed). False = fit (letterbox).
+    var imageFills: Bool
 
     // Text — `text` is the primary/default string; `translations` holds per-locale overrides.
     var text: String?
@@ -121,6 +218,9 @@ struct ScreenshotLayer: Codable, Identifiable {
         self.widthFraction = 0.8
         self.heightFraction = type == .text ? 0.1 : 0.4
         self.isVisible = true
+        self.frameAssetName = nil
+        self.imageCornerRadius = 0
+        self.imageFills = false
         self.text = "Your text here"
         self.translations = [:]
         self.fontSizePt = 40
@@ -152,7 +252,7 @@ struct ScreenshotLayer: Codable, Identifiable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, xFraction, yFraction, widthFraction, heightFraction, isVisible
+        case id, type, xFraction, yFraction, widthFraction, heightFraction, isVisible, frameAssetName, imageCornerRadius, imageFills
         case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
         case textBackgroundHex, textPaddingPt, textCornerRadiusPt, textUsesMarkdown
         case fitWidthToContent, fitHeightToContent
@@ -168,6 +268,9 @@ struct ScreenshotLayer: Codable, Identifiable {
         widthFraction = try c.decodeIfPresent(Double.self, forKey: .widthFraction) ?? 0.8
         heightFraction = try c.decodeIfPresent(Double.self, forKey: .heightFraction) ?? 0.1
         isVisible = try c.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true
+        frameAssetName = try c.decodeIfPresent(String.self, forKey: .frameAssetName)
+        imageCornerRadius = try c.decodeIfPresent(Double.self, forKey: .imageCornerRadius) ?? 0
+        imageFills = try c.decodeIfPresent(Bool.self, forKey: .imageFills) ?? false
         text = try c.decodeIfPresent(String.self, forKey: .text)
         translations = try c.decodeIfPresent([String: String].self, forKey: .translations) ?? [:]
         fontSizePt = try c.decodeIfPresent(Double.self, forKey: .fontSizePt) ?? 40

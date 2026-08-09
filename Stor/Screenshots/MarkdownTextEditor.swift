@@ -157,26 +157,35 @@ struct MarkdownRichTextEditor: NSViewRepresentable {
             if !force, isUpdating { return }
 
             let selected = textView.selectedRange()
+            // Build with canvas color so Markdown format runs are styled correctly,
+            // then override foreground to system label color so the editor is always
+            // readable on the inspector background regardless of the canvas text color.
             let attributed = MarkdownAttributedCodec.attributedString(
                 from: markdown,
                 colorHex: parent.textColorHex,
                 alignment: parent.alignment,
                 fontSize: NSFont.systemFontSize + 1
             )
+            let display = NSMutableAttributedString(attributedString: attributed)
+            display.addAttribute(
+                .foregroundColor,
+                value: NSColor.labelColor,
+                range: NSRange(location: 0, length: display.length)
+            )
             isUpdating = true
-            textView.textStorage?.setAttributedString(attributed)
-            let length = attributed.length
+            textView.textStorage?.setAttributedString(display)
+            let length = display.length
             let location = min(selected.location, length)
             let maxLen = length - location
             textView.setSelectedRange(NSRange(location: location, length: min(selected.length, maxLen)))
-            // Preserve typing attributes when only color/alignment changed and caret styles exist;
-            // reset to base when content was fully reloaded from markdown.
-            textView.typingAttributes = MarkdownAttributedCodec.typingAttributes(
+            var typingAttrs = MarkdownAttributedCodec.typingAttributes(
                 matching: textView,
                 colorHex: parent.textColorHex,
                 alignment: parent.alignment,
                 fontSize: NSFont.systemFontSize + 1
             )
+            typingAttrs[.foregroundColor] = NSColor.labelColor
+            textView.typingAttributes = typingAttrs
             lastMarkdown = markdown
             lastColorHex = parent.textColorHex
             lastAlignment = parent.alignment
