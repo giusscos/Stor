@@ -112,53 +112,9 @@ struct DeviceFrameOption: Identifiable, Hashable {
     }
 }
 
-// MARK: - Image cache
-
-/// Caches decoded NSImage objects so NSImage(data:) is only called once per unique image payload.
-@MainActor
-final class ImageCache {
-    static let shared = ImageCache()
-    private var store: [UUID: (count: Int, image: NSImage)] = [:]
-    private var previewStore: [UUID: (count: Int, image: NSImage)] = [:]
-
-    /// Longest edge of the downsampled canvas-preview image. The editor canvas is only
-    /// a few hundred points wide, so drawing the full-resolution screenshot every frame
-    /// wastes GPU/CPU; export still uses `image(for:id:)`.
-    private static let previewMaxPixelSize = 1200
-
-    func image(for data: Data, id: UUID) -> NSImage? {
-        if let entry = store[id], entry.count == data.count { return entry.image }
-        guard let img = NSImage(data: data) else { return nil }
-        store[id] = (data.count, img)
-        return img
-    }
-
-    /// Downsampled version for on-canvas preview. Falls back to the full image.
-    func previewImage(for data: Data, id: UUID) -> NSImage? {
-        if let entry = previewStore[id], entry.count == data.count { return entry.image }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: Self.previewMaxPixelSize
-        ]
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return image(for: data, id: id)
-        }
-        let img = NSImage(cgImage: cg, size: .zero)
-        previewStore[id] = (data.count, img)
-        return img
-    }
-
-    func invalidate(_ id: UUID) {
-        store.removeValue(forKey: id)
-        previewStore.removeValue(forKey: id)
-    }
-}
-
 // MARK: - Layer model
 
-struct ScreenshotLayer: Codable, Identifiable {
+struct ScreenshotLayer: Codable, Identifiable, Equatable {
     var id: UUID
     var type: LayerType
     /// Optional display name shown in the layers list (mainly for image layers).
@@ -204,8 +160,50 @@ struct ScreenshotLayer: Codable, Identifiable {
     /// When true, height hugs the measured text (plus padding) instead of `heightFraction`.
     var fitHeightToContent: Bool
 
-    // Image
-    var imageData: Data?
+    // Image — the bytes live in ScreenshotImageStore; the layer only carries the digest.
+    var imageRef: String?
+    /// Only set when decoding a template saved before images moved out of the layer JSON.
+    /// Cleared by `ScreenshotLayer.migrateEmbeddedImages` and never re-encoded.
+    private var embeddedImageData: Data?
+
+    /// Image bytes for this layer, resolved through the store.
+    var imageData: Data? {
+        get {
+            if let imageRef { return ScreenshotImageStore.shared.data(for: imageRef) }
+            return embeddedImageData
+        }
+        set {
+            embeddedImageData = nil
+            imageRef = newValue.map { ScreenshotImageStore.shared.store($0) }
+        }
+    }
+
+    /// Full-resolution image for export.
+    func loadImage() -> NSImage? {
+        guard let imageRef else { return embeddedImageData.flatMap(NSImage.init(data:)) }
+        return ScreenshotImageStore.shared.image(for: imageRef)
+    }
+
+    /// Downsampled image for the editor canvas.
+    func loadPreviewImage() -> NSImage? {
+        guard let imageRef else { return embeddedImageData.flatMap(NSImage.init(data:)) }
+        return ScreenshotImageStore.shared.previewImage(for: imageRef)
+    }
+
+    var hasImage: Bool { imageRef != nil || embeddedImageData != nil }
+
+    /// Moves any legacy inline image bytes into the store. Returns true when something
+    /// changed, so the caller knows to persist the slimmed-down JSON.
+    static func migrateEmbeddedImages(in layers: inout [ScreenshotLayer]) -> Bool {
+        var changed = false
+        for index in layers.indices {
+            guard let legacy = layers[index].embeddedImageData else { continue }
+            layers[index].imageRef = ScreenshotImageStore.shared.store(legacy)
+            layers[index].embeddedImageData = nil
+            changed = true
+        }
+        return changed
+    }
 
     enum LayerType: String, Codable {
         case text, image
@@ -281,7 +279,8 @@ struct ScreenshotLayer: Codable, Identifiable {
         self.textUsesMarkdown = true
         self.fitWidthToContent = false
         self.fitHeightToContent = false
-        self.imageData = nil
+        self.imageRef = nil
+        self.embeddedImageData = nil
     }
 
     /// Label shown in the layers list: custom name when set, otherwise text preview or "Image".
@@ -314,6 +313,8 @@ struct ScreenshotLayer: Codable, Identifiable {
         case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
         case textBackgroundHex, textPaddingPt, textCornerRadiusPt, textUsesMarkdown
         case fitWidthToContent, fitHeightToContent
+        case imageRef
+        /// Legacy key: inline bytes from templates saved before the image store existed.
         case imageData
     }
 
@@ -351,7 +352,46 @@ struct ScreenshotLayer: Codable, Identifiable {
         textUsesMarkdown = try c.decodeIfPresent(Bool.self, forKey: .textUsesMarkdown) ?? true
         fitWidthToContent = try c.decodeIfPresent(Bool.self, forKey: .fitWidthToContent) ?? false
         fitHeightToContent = try c.decodeIfPresent(Bool.self, forKey: .fitHeightToContent) ?? false
-        imageData = try c.decodeIfPresent(Data.self, forKey: .imageData)
+        imageRef = try c.decodeIfPresent(String.self, forKey: .imageRef)
+        embeddedImageData = imageRef == nil
+            ? try c.decodeIfPresent(Data.self, forKey: .imageData)
+            : nil
+    }
+
+    /// Written explicitly so the legacy `imageData` key is never re-emitted.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(type, forKey: .type)
+        try c.encodeIfPresent(name, forKey: .name)
+        try c.encode(xFraction, forKey: .xFraction)
+        try c.encode(yFraction, forKey: .yFraction)
+        try c.encode(widthFraction, forKey: .widthFraction)
+        try c.encode(heightFraction, forKey: .heightFraction)
+        try c.encode(isVisible, forKey: .isVisible)
+        try c.encodeIfPresent(frameAssetName, forKey: .frameAssetName)
+        try c.encode(imageCornerRadius, forKey: .imageCornerRadius)
+        try c.encode(imageFills, forKey: .imageFills)
+        try c.encode(contentScale, forKey: .contentScale)
+        try c.encode(contentOffsetX, forKey: .contentOffsetX)
+        try c.encode(contentOffsetY, forKey: .contentOffsetY)
+        try c.encodeIfPresent(text, forKey: .text)
+        try c.encode(translations, forKey: .translations)
+        try c.encode(fontSizePt, forKey: .fontSizePt)
+        try c.encode(colorHex, forKey: .colorHex)
+        try c.encode(isBold, forKey: .isBold)
+        try c.encode(fontFamily, forKey: .fontFamily)
+        try c.encode(fontWeightRaw, forKey: .fontWeightRaw)
+        try c.encode(isItalic, forKey: .isItalic)
+        try c.encode(tracking, forKey: .tracking)
+        try c.encode(alignmentRaw, forKey: .alignmentRaw)
+        try c.encodeIfPresent(textBackgroundHex, forKey: .textBackgroundHex)
+        try c.encode(textPaddingPt, forKey: .textPaddingPt)
+        try c.encode(textCornerRadiusPt, forKey: .textCornerRadiusPt)
+        try c.encode(textUsesMarkdown, forKey: .textUsesMarkdown)
+        try c.encode(fitWidthToContent, forKey: .fitWidthToContent)
+        try c.encode(fitHeightToContent, forKey: .fitHeightToContent)
+        try c.encodeIfPresent(imageRef, forKey: .imageRef)
     }
 }
 
@@ -371,6 +411,22 @@ extension ScreenshotLayer {
         return CGRect(
             x: layerRect.midX - width / 2 + contentOffsetX * layerRect.width,
             y: layerRect.midY - height / 2 + contentOffsetY * layerRect.height,
+            width: width,
+            height: height
+        )
+    }
+
+    /// Centred aspect-fit rect for a device bezel inside `layerRect`. The preview draws
+    /// the frame with SwiftUI's `.fit` content mode, so the export has to letterbox the
+    /// same way — `NSImage.draw(in:)` would stretch it to fill instead.
+    static func deviceFrameRect(frameSize: CGSize, in layerRect: CGRect) -> CGRect {
+        guard frameSize.width > 0, frameSize.height > 0 else { return layerRect }
+        let scale = min(layerRect.width / frameSize.width, layerRect.height / frameSize.height)
+        let width = frameSize.width * scale
+        let height = frameSize.height * scale
+        return CGRect(
+            x: layerRect.midX - width / 2,
+            y: layerRect.midY - height / 2,
             width: width,
             height: height
         )
@@ -600,7 +656,13 @@ final class ScreenshotTemplate {
             let data = layersData
             if let layersCache { return layersCache }
             guard !data.isEmpty else { return [] }
-            let decoded = (try? JSONDecoder().decode([ScreenshotLayer].self, from: data)) ?? []
+            var decoded = (try? JSONDecoder().decode([ScreenshotLayer].self, from: data)) ?? []
+            // Templates saved before the image store carried their PNG bytes inline.
+            // Move them out once, on first read, and persist the slimmer JSON.
+            if ScreenshotLayer.migrateEmbeddedImages(in: &decoded),
+               let migrated = try? JSONEncoder().encode(decoded) {
+                layersData = migrated
+            }
             layersCache = decoded
             return decoded
         }

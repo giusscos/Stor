@@ -13,6 +13,8 @@ struct ListingTabView: View {
     @State private var showDiff = false
     @State private var importMessage: String?
     @State private var importSucceeded = false
+    @State private var showPushConfirmation = false
+    @State private var pushResult: String?
 
     var sortedSnapshots: [MetadataSnapshot] {
         app.snapshots.sorted { $0.capturedAt > $1.capturedAt }
@@ -50,7 +52,7 @@ struct ListingTabView: View {
                 }
                 .help("Download a sample Markdown template")
 
-                Button(action: pushChanges) {
+                Button(action: confirmPush) {
                     if isPushing {
                         ProgressView().scaleEffect(0.7)
                     } else {
@@ -84,6 +86,16 @@ struct ListingTabView: View {
         } message: {
             Text(syncError ?? "")
         }
+        .confirmationDialog(
+            "Push metadata to App Store Connect?",
+            isPresented: $showPushConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Push to App Store Connect", role: .destructive, action: pushChanges)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(pushConfirmationMessage)
+        }
         .alert("Push Failed", isPresented: Binding(
             get: { pushError != nil },
             set: { if !$0 { pushError = nil } }
@@ -91,6 +103,14 @@ struct ListingTabView: View {
             Button("OK") { pushError = nil }
         } message: {
             Text(pushError ?? "")
+        }
+        .alert("Push Complete", isPresented: Binding(
+            get: { pushResult != nil },
+            set: { if !$0 { pushResult = nil } }
+        )) {
+            Button("OK") { pushResult = nil }
+        } message: {
+            Text(pushResult ?? "")
         }
         .alert(importSucceeded ? "Import Complete" : "Import Failed", isPresented: Binding(
             get: { importMessage != nil },
@@ -256,6 +276,37 @@ struct ListingTabView: View {
 
     // MARK: - Push
 
+    /// Validates first, then asks for confirmation. Pushing overwrites the live listing,
+    /// so it should never happen as the direct result of a single click.
+    private func confirmPush() {
+        guard let latest = sortedSnapshots.first else { return }
+
+        let violations = latest.limitViolations
+        guard violations.isEmpty else {
+            pushError = "Fix these fields before pushing:\n"
+                + violations.map { "• " + $0.description }.joined(separator: "\n")
+            return
+        }
+        guard !latest.pushableLocalizations.isEmpty else {
+            pushError = "No locales have App Store Connect IDs yet. Sync before pushing."
+            return
+        }
+        showPushConfirmation = true
+    }
+
+    private var pushConfirmationMessage: String {
+        guard let latest = sortedSnapshots.first else { return "" }
+        let count = latest.pushableLocalizations.count
+        let version = latest.versionString.map { " for version \($0)" } ?? ""
+        var message = "This overwrites the live App Store Connect listing"
+            + "\(version) across \(count) locale\(count == 1 ? "" : "s"). This cannot be undone from Stor."
+        let skipped = latest.unpushableLocales
+        if !skipped.isEmpty {
+            message += "\n\nNot pushed (never synced): \(skipped.joined(separator: ", "))."
+        }
+        return message
+    }
+
     private func pushChanges() {
         guard let latest = sortedSnapshots.first else { return }
         guard let credentials = try? KeychainService.shared.load() else {
@@ -269,8 +320,14 @@ struct ListingTabView: View {
         Task {
             defer { isPushing = false }
             let client = ASCAPIClient(credentials: credentials)
-            do {
-                for loc in latest.localizations {
+
+            var pushed: [String] = []
+            var failed: [(locale: String, message: String)] = []
+
+            // Each locale is pushed independently: a failure part-way through should not
+            // hide the fact that earlier locales are already live.
+            for loc in latest.pushableLocalizations.sorted(by: { $0.locale < $1.locale }) {
+                do {
                     if let id = loc.versionLocalizationId {
                         try await client.updateVersionLocalization(
                             id: id,
@@ -287,9 +344,19 @@ struct ListingTabView: View {
                             subtitle: loc.subtitle
                         )
                     }
+                    pushed.append(loc.locale)
+                } catch {
+                    failed.append((loc.locale, error.localizedDescription))
                 }
-            } catch {
-                pushError = error.localizedDescription
+            }
+
+            if failed.isEmpty {
+                pushResult = "Pushed \(pushed.count) locale\(pushed.count == 1 ? "" : "s") to App Store Connect."
+            } else {
+                let detail = failed.map { "• \($0.locale): \($0.message)" }.joined(separator: "\n")
+                pushError = pushed.isEmpty
+                    ? "Nothing was pushed.\n\(detail)"
+                    : "Pushed \(pushed.joined(separator: ", ")). These failed and are unchanged:\n\(detail)"
             }
         }
     }

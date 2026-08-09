@@ -6,8 +6,19 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		3BDB6C36302768DF00D5617A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3BDB6C0B302768DF00D5617A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3BDB6C12302768DF00D5617A;
+			remoteInfo = Stor;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		3BDB6C13302768DF00D5617A /* Stor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3BDB6C30302768DF00D5617A /* StorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +27,20 @@
 			path = Stor;
 			sourceTree = "<group>";
 		};
+		3BDB6C31302768DF00D5617A /* StorTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StorTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		3BDB6C10302768DF00D5617A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		3BDB6C33302768DF00D5617A /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 			);
@@ -32,6 +53,7 @@
 			children = (
 				3BDB6C15302768DF00D5617A /* Stor */,
 				3BDB6C14302768DF00D5617A /* Products */,
+				3BDB6F893028DF5700D5617A /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};
@@ -39,8 +61,17 @@
 			isa = PBXGroup;
 			children = (
 				3BDB6C13302768DF00D5617A /* Stor.app */,
+				3BDB6C30302768DF00D5617A /* StorTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		3BDB6F893028DF5700D5617A /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				3BDB6C31302768DF00D5617A /* StorTests */,
+			);
+			name = "Recovered References";
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -64,6 +95,27 @@
 			productReference = 3BDB6C13302768DF00D5617A /* Stor.app */;
 			productType = "com.apple.product-type.application";
 		};
+		3BDB6C35302768DF00D5617A /* StorTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3BDB6C3A302768DF00D5617A /* Build configuration list for PBXNativeTarget "StorTests" */;
+			buildPhases = (
+				3BDB6C32302768DF00D5617A /* Sources */,
+				3BDB6C33302768DF00D5617A /* Frameworks */,
+				3BDB6C34302768DF00D5617A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3BDB6C37302768DF00D5617A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				3BDB6C31302768DF00D5617A /* StorTests */,
+			);
+			name = StorTests;
+			productName = StorTests;
+			productReference = 3BDB6C30302768DF00D5617A /* StorTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -76,6 +128,10 @@
 				TargetAttributes = {
 					3BDB6C12302768DF00D5617A = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					3BDB6C35302768DF00D5617A = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 3BDB6C12302768DF00D5617A;
 					};
 				};
 			};
@@ -94,12 +150,18 @@
 			projectRoot = "";
 			targets = (
 				3BDB6C12302768DF00D5617A /* Stor */,
+				3BDB6C35302768DF00D5617A /* StorTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		3BDB6C11302768DF00D5617A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		3BDB6C34302768DF00D5617A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -112,7 +174,20 @@
 			files = (
 			);
 		};
+		3BDB6C32302768DF00D5617A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3BDB6C37302768DF00D5617A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 3BDB6C12302768DF00D5617A /* Stor */;
+			targetProxy = 3BDB6C36302768DF00D5617A /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		3BDB6C1C302768E200D5617A /* Debug configuration for PBXProject "Stor" */ = {
@@ -319,6 +394,48 @@
 			};
 			name = Release;
 		};
+		3BDB6C38302768DF00D5617A /* Debug configuration for PBXNativeTarget "StorTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MA7MBQ947C;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.giusscos.StorTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stor.app/Contents/MacOS/Stor";
+			};
+			name = Debug;
+		};
+		3BDB6C39302768DF00D5617A /* Release configuration for PBXNativeTarget "StorTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = MA7MBQ947C;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.giusscos.StorTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stor.app/Contents/MacOS/Stor";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -335,6 +452,14 @@
 			buildConfigurations = (
 				3BDB6C1F302768E200D5617A /* Debug configuration for PBXNativeTarget "Stor" */,
 				3BDB6C20302768E200D5617A /* Release configuration for PBXNativeTarget "Stor" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		3BDB6C3A302768DF00D5617A /* Build configuration list for PBXNativeTarget "StorTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3BDB6C38302768DF00D5617A /* Debug configuration for PBXNativeTarget "StorTests" */,
+				3BDB6C39302768DF00D5617A /* Release configuration for PBXNativeTarget "StorTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

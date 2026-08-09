@@ -152,14 +152,25 @@ final class KeychainService {
     }
 
     private func writeKeychainData(_ data: Data) throws {
-        let query: [CFString: Any] = [
+        try KeychainService.write(data, service: service, account: account)
+    }
+
+    /// Signing keys are device-bound on purpose: `ThisDeviceOnly` keeps the `.p8` out of
+    /// iCloud Keychain so it cannot propagate to the user's other machines.
+    fileprivate static func write(_ data: Data, service: String, account: String) throws {
+        let identity: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
-            kSecAttrAccount: account,
-            kSecValueData: data
+            kSecAttrAccount: account
         ]
-        SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
+        SecItemDelete(identity as CFDictionary)
+
+        var attributes = identity
+        attributes[kSecValueData] = data
+        attributes[kSecAttrAccessible] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        attributes[kSecAttrSynchronizable] = false
+
+        let status = SecItemAdd(attributes as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
     }
 
@@ -197,6 +208,9 @@ struct SearchAdsCredentials: Codable {
     let keyId: String
     let privateKeyPEM: String
     var orgId: String
+
+    /// Identifies which account an issued token belongs to, without including the key itself.
+    var cacheIdentity: String { "\(clientId)|\(teamId)|\(keyId)|\(orgId)" }
 }
 
 extension KeychainService {
@@ -204,15 +218,8 @@ extension KeychainService {
 
     func saveSearchAds(_ credentials: SearchAdsCredentials) throws {
         let data = try JSONEncoder().encode(credentials)
-        let query: [CFString: Any] = [
-            kSecClass: kSecClassGenericPassword,
-            kSecAttrService: service,
-            kSecAttrAccount: searchAdsAccount,
-            kSecValueData: data
-        ]
-        SecItemDelete(query as CFDictionary)
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
+        try KeychainService.write(data, service: service, account: searchAdsAccount)
+        SearchAdsAPIClient.shared.invalidateToken()
     }
 
     func loadSearchAds() throws -> SearchAdsCredentials? {
@@ -242,6 +249,7 @@ extension KeychainService {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.deleteFailed(status)
         }
+        SearchAdsAPIClient.shared.invalidateToken()
     }
 }
 

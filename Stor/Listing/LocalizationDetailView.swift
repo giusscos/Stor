@@ -14,17 +14,17 @@ struct LocalizationDetailView: View {
         if hasAnyContent {
             VStack(alignment: .leading, spacing: 20) {
                 if let name = localization.appName {
-                    MetadataField(title: "App Name", text: name, limit: 30, isEditable: isEditable) {
+                    MetadataFieldRow(field: .appName, text: name, isEditable: isEditable) {
                         localization.appName = $0
                     }
                 }
                 if let subtitle = localization.subtitle {
-                    MetadataField(title: "Subtitle", text: subtitle, limit: 30, isEditable: isEditable) {
+                    MetadataFieldRow(field: .subtitle, text: subtitle, isEditable: isEditable) {
                         localization.subtitle = $0
                     }
                 }
                 if let desc = localization.appDescription {
-                    MetadataField(title: "Description", text: desc, limit: 4000, isEditable: isEditable, multiline: true) {
+                    MetadataFieldRow(field: .appDescription, text: desc, isEditable: isEditable, multiline: true) {
                         localization.appDescription = $0
                     }
                 }
@@ -34,12 +34,12 @@ struct LocalizationDetailView: View {
                     }
                 }
                 if let promo = localization.promotionalText {
-                    MetadataField(title: "Promotional Text", text: promo, limit: 170, isEditable: isEditable, multiline: true) {
+                    MetadataFieldRow(field: .promotionalText, text: promo, isEditable: isEditable, multiline: true) {
                         localization.promotionalText = $0
                     }
                 }
                 if let whatsNew = localization.whatsNew {
-                    MetadataField(title: "What's New", text: whatsNew, limit: 4000, isEditable: isEditable, multiline: true) {
+                    MetadataFieldRow(field: .whatsNew, text: whatsNew, isEditable: isEditable, multiline: true) {
                         localization.whatsNew = $0
                     }
                 }
@@ -50,12 +50,34 @@ struct LocalizationDetailView: View {
     }
 }
 
+// MARK: - Character counter
+
+/// Shared counter that warns before the limit and blocks at it, so the state shown while
+/// editing matches the rule that gates Save and Push.
+struct CharacterCountLabel: View {
+    let count: Int
+    let limit: Int
+
+    private var tint: Color {
+        if count > limit { return .red }
+        if Double(count) >= Double(limit) * MetadataField.warningThreshold { return .orange }
+        return .secondary
+    }
+
+    var body: some View {
+        Text("\(count) / \(limit)")
+            .font(.caption)
+            .monospacedDigit()
+            .foregroundStyle(tint)
+            .accessibilityLabel("\(count) of \(limit) characters used")
+    }
+}
+
 // MARK: - Generic field
 
-private struct MetadataField: View {
-    let title: String
+private struct MetadataFieldRow: View {
+    let field: MetadataField
     let text: String
-    let limit: Int
     let isEditable: Bool
     var multiline: Bool = false
     let onEdit: (String) -> Void
@@ -63,19 +85,18 @@ private struct MetadataField: View {
     @State private var draft = ""
     @State private var editing = false
 
-    var overLimit: Bool { text.count > limit }
+    private var limit: Int { field.limit }
+    private var overLimit: Bool { text.count > limit }
+    private var draftOverLimit: Bool { draft.count > limit }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(title)
+                Text(field.rawValue)
                     .font(.subheadline)
                     .fontWeight(.semibold)
                 Spacer()
-                Text("\(text.count) / \(limit)")
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(overLimit ? .red : .secondary)
+                CharacterCountLabel(count: editing ? draft.count : text.count, limit: limit)
                 if isEditable && !editing {
                     Button("Edit") { draft = text; editing = true }
                         .font(.caption)
@@ -90,17 +111,24 @@ private struct MetadataField: View {
                         TextEditor(text: $draft)
                             .font(.body)
                             .frame(minHeight: 100, maxHeight: 280)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor.opacity(0.5), lineWidth: 1.5))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(borderColor, lineWidth: 1.5))
                     } else {
                         TextField("", text: $draft)
                             .textFieldStyle(.plain)
                             .padding(8)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor.opacity(0.5), lineWidth: 1.5))
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(borderColor, lineWidth: 1.5))
                     }
                     HStack {
+                        if draftOverLimit {
+                            Text("\(draft.count - limit) over the App Store limit")
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                        Spacer()
                         Button("Cancel") { editing = false }.buttonStyle(.borderless)
                         Button("Save") { onEdit(draft); editing = false }
                             .buttonStyle(.borderedProminent).controlSize(.small)
+                            .disabled(draftOverLimit)
                     }
                 }
             } else {
@@ -114,6 +142,10 @@ private struct MetadataField: View {
             }
         }
     }
+
+    private var borderColor: Color {
+        draftOverLimit ? .red : Color.accentColor.opacity(0.5)
+    }
 }
 
 // MARK: - Keywords field
@@ -126,22 +158,40 @@ private struct KeywordsField: View {
     @State private var draft = ""
     @State private var editing = false
 
+    private static let limit = MetadataField.keywords.limit
+
     var chips: [String] {
-        text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        Self.terms(in: text)
     }
-    var overLimit: Bool { text.count > 100 }
+    var overLimit: Bool { text.count > Self.limit }
+
+    private var draftTerms: [String] { Self.terms(in: draft) }
+    private var draftOverLimit: Bool { draft.count > Self.limit }
+
+    /// Terms repeated in the field. Apple ignores the duplicate but it still costs budget.
+    private var duplicateTerms: [String] {
+        var seen = Set<String>()
+        var duplicates: [String] = []
+        for term in draftTerms {
+            if !seen.insert(term.lowercased()).inserted, !duplicates.contains(term) {
+                duplicates.append(term)
+            }
+        }
+        return duplicates
+    }
+
+    private static func terms(in raw: String) -> [String] {
+        raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Keywords")
+                Text(MetadataField.keywords.rawValue)
                     .font(.subheadline)
                     .fontWeight(.semibold)
                 Spacer()
-                Text("\(text.count) / 100")
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(overLimit ? .red : .secondary)
+                CharacterCountLabel(count: editing ? draft.count : text.count, limit: Self.limit)
                 if isEditable && !editing {
                     Button("Edit") { draft = text; editing = true }
                         .font(.caption)
@@ -155,19 +205,38 @@ private struct KeywordsField: View {
                     TextField("keyword1,keyword2,keyword3", text: $draft)
                         .textFieldStyle(.plain)
                         .padding(8)
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor.opacity(0.5), lineWidth: 1.5))
-                    HStack {
-                        Text("Comma-separated").font(.caption2).foregroundStyle(.tertiary)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(draftOverLimit ? .red : Color.accentColor.opacity(0.5), lineWidth: 1.5)
+                        )
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(budgetHint)
+                                .font(.caption2)
+                                .foregroundStyle(draftOverLimit ? AnyShapeStyle(.red) : AnyShapeStyle(.tertiary))
+                            if !duplicateTerms.isEmpty {
+                                Text("Repeated: \(duplicateTerms.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
                         Spacer()
                         Button("Cancel") { editing = false }.buttonStyle(.borderless)
                         Button("Save") { onEdit(draft); editing = false }
                             .buttonStyle(.borderedProminent).controlSize(.small)
+                            .disabled(draftOverLimit)
                     }
                 }
             } else {
                 ChipCloud(chips: chips)
             }
         }
+    }
+
+    private var budgetHint: String {
+        let remaining = Self.limit - draft.count
+        if remaining < 0 { return "\(-remaining) characters over the limit" }
+        return "Comma-separated · \(remaining) characters left · \(draftTerms.count) term\(draftTerms.count == 1 ? "" : "s")"
     }
 }
 

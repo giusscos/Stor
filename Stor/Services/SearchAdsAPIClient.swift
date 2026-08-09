@@ -38,6 +38,9 @@ final class SearchAdsAPIClient {
 
     private var cachedToken: String?
     private var tokenExpiry: Date?
+    /// Identity of the credentials the cached token was issued for. Without this a token
+    /// minted for one org keeps being sent after the user switches accounts.
+    private var tokenOwner: String?
 
     // MARK: Public
 
@@ -53,11 +56,9 @@ final class SearchAdsAPIClient {
             credentials: credentials
         )
         let target = keyword.lowercased()
-        if let match = suggestions.first(where: { $0.text.lowercased() == target }) {
-            return match.score
-        }
-        // Keyword not found in suggestions → treat as low volume when API returned rows
-        return suggestions.isEmpty ? nil : 0
+        // No exact row means Apple has no score for this term. Returning nil keeps that
+        // distinct from a genuine zero so the keyword table can show "unknown".
+        return suggestions.first(where: { $0.text.lowercased() == target })?.score
     }
 
     /// Spotlight suggestion rows (related terms + scores) for a query.
@@ -90,22 +91,69 @@ final class SearchAdsAPIClient {
         return parseSuggestions(from: data)
     }
 
-    /// Refreshes popularity scores for all keywords and updates them in-place.
+    /// Refreshes popularity scores in-place, keeping going when individual terms fail so
+    /// one bad keyword cannot discard the whole batch.
+    @discardableResult
     func refreshPopularity(
         keywords: [TrackedKeyword],
         credentials: SearchAdsCredentials
-    ) async throws {
+    ) async throws -> BatchOutcome {
+        var outcome = BatchOutcome(total: keywords.count)
         for kw in keywords {
-            let score = try await fetchPopularity(keyword: kw.term, country: kw.country, credentials: credentials)
-            kw.popularityScore = score
-            kw.popularityLastUpdated = .now
+            do {
+                kw.popularityScore = try await fetchPopularity(
+                    keyword: kw.term,
+                    country: kw.country,
+                    credentials: credentials
+                )
+                kw.popularityLastUpdated = .now
+                outcome.succeeded += 1
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                outcome.failures.append(.init(term: kw.term, message: error.localizedDescription))
+            }
+        }
+        return outcome
+    }
+
+    struct BatchOutcome {
+        struct Failure {
+            let term: String
+            let message: String
+        }
+
+        let total: Int
+        var succeeded = 0
+        var failures: [Failure] = []
+
+        var didPartiallyFail: Bool { !failures.isEmpty && succeeded > 0 }
+        var didCompletelyFail: Bool { succeeded == 0 && !failures.isEmpty }
+
+        /// User-facing summary, or nil when everything succeeded.
+        var summary: String? {
+            guard !failures.isEmpty else { return nil }
+            let detail = failures.prefix(3).map(\.term).joined(separator: ", ")
+            let suffix = failures.count > 3 ? " and \(failures.count - 3) more" : ""
+            if succeeded == 0 {
+                return "All \(total) keywords failed. First error: \(failures[0].message)"
+            }
+            return "Updated \(succeeded) of \(total). Failed: \(detail)\(suffix)."
         }
     }
 
     // MARK: - Token
 
+    /// Drops any cached token. Call after credentials change or are removed.
+    func invalidateToken() {
+        cachedToken = nil
+        tokenExpiry = nil
+        tokenOwner = nil
+    }
+
     private func accessToken(for credentials: SearchAdsCredentials) async throws -> String {
-        if let t = cachedToken, let exp = tokenExpiry, Date() < exp { return t }
+        let owner = credentials.cacheIdentity
+        if let t = cachedToken, let exp = tokenExpiry, tokenOwner == owner, Date() < exp { return t }
 
         let assertion = try clientAssertion(credentials: credentials)
 
@@ -131,6 +179,7 @@ final class SearchAdsAPIClient {
         let tr = try JSONDecoder().decode(TokenResponse.self, from: data)
         cachedToken  = tr.accessToken
         tokenExpiry  = Date().addingTimeInterval(TimeInterval(tr.expiresIn - 60))
+        tokenOwner   = owner
         return tr.accessToken
     }
 

@@ -2,9 +2,32 @@ import Foundation
 import CryptoKit
 
 final class ASCJWTGenerator {
+    /// Apple caps App Store Connect tokens at 20 minutes. We reuse a token until it is
+    /// close to expiry so a batch push does not re-sign on every request.
+    private static let lifetime: TimeInterval = 1200
+    private static let refreshMargin: TimeInterval = 120
+
+    private var cachedToken: String?
+    private var cachedKey: String?
+    private var cachedExpiry: Date?
+
     func generateToken(credentials: ASCCredentials) throws -> String {
+        let key = "\(credentials.issuerId)|\(credentials.keyId)"
+        if let cachedToken, cachedKey == key, let cachedExpiry,
+           Date() < cachedExpiry.addingTimeInterval(-Self.refreshMargin) {
+            return cachedToken
+        }
+
+        let token = try signToken(credentials: credentials)
+        cachedToken = token
+        cachedKey = key
+        cachedExpiry = Date().addingTimeInterval(Self.lifetime)
+        return token
+    }
+
+    private func signToken(credentials: ASCCredentials) throws -> String {
         let now = Date()
-        let expiry = now.addingTimeInterval(1200)
+        let expiry = now.addingTimeInterval(Self.lifetime)
 
         let header = try base64URLEncode([
             "alg": "ES256",

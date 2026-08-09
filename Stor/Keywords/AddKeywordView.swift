@@ -4,6 +4,7 @@ import SwiftData
 struct AddKeywordView: View {
     let app: AppRecord
     let defaultCountry: String
+    let onAdd: (AppRecord.KeywordInsertResult) -> Void
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -11,11 +12,16 @@ struct AddKeywordView: View {
     @State private var keywordsText = ""
     @State private var selectedCountry: String
 
-    private let countries = ["US", "GB", "DE", "FR", "IT", "ES", "JP", "CA", "AU", "BR"]
+    private let countries = KeywordCountries.all
 
-    init(app: AppRecord, defaultCountry: String) {
+    init(
+        app: AppRecord,
+        defaultCountry: String,
+        onAdd: @escaping (AppRecord.KeywordInsertResult) -> Void = { _ in }
+    ) {
         self.app = app
         self.defaultCountry = defaultCountry
+        self.onAdd = onAdd
         _selectedCountry = State(initialValue: defaultCountry)
     }
 
@@ -32,7 +38,7 @@ struct AddKeywordView: View {
                 Section {
                     Picker("Country", selection: $selectedCountry) {
                         ForEach(countries, id: \.self) { cc in
-                            Text(Locale.current.localizedString(forRegionCode: cc) ?? cc).tag(cc)
+                            Text(KeywordCountries.displayName(cc)).tag(cc)
                         }
                     }
                 }
@@ -66,13 +72,29 @@ struct AddKeywordView: View {
     }
 
     private func addKeywords() {
-        let existing = Set(app.trackedKeywords.map { $0.term.lowercased() })
-        for term in keywordList where !existing.contains(term.lowercased()) {
-            let kw = TrackedKeyword(term: term, country: selectedCountry)
-            kw.app = app
-            app.trackedKeywords.append(kw)
-            modelContext.insert(kw)
-        }
+        let result = app.insertKeywords(
+            keywordList,
+            locale: localeForCountry(selectedCountry),
+            country: selectedCountry,
+            into: modelContext
+        )
+        onAdd(result)
         dismiss()
+    }
+
+    /// Records the locale that actually matches the chosen storefront instead of always
+    /// defaulting to `en-US`. Prefers a real localization the app already ships there.
+    private func localeForCountry(_ country: String) -> String {
+        if countryCode(fromLocale: app.primaryLocale) == country {
+            return app.primaryLocale
+        }
+        if let shipped = app.snapshots
+            .flatMap(\.localizations)
+            .map(\.locale)
+            .first(where: { countryCode(fromLocale: $0) == country }) {
+            return shipped
+        }
+        let language = app.primaryLocale.split(separator: "-").first.map(String.init) ?? "en"
+        return "\(language)-\(country)"
     }
 }

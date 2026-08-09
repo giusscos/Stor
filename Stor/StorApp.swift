@@ -21,6 +21,21 @@ struct StorApp: App {
         .commands {
             // Disable File > New since we manage apps via the sidebar
             CommandGroup(replacing: .newItem) {}
+            ScreenshotLayerMenu()
+        }
+
+        Settings {
+            SettingsView()
+                .modelContainer(for: [
+                    AppRecord.self,
+                    MetadataSnapshot.self,
+                    LocalizedMetadata.self,
+                    TrackedKeyword.self,
+                    KeywordRanking.self,
+                    CompetitorApp.self,
+                    CompetitorKeywordRanking.self,
+                    ScreenshotTemplate.self
+                ])
         }
     }
 }

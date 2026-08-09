@@ -9,6 +9,43 @@ struct AppSidebarView: View {
     @State private var showAddAccount = false
     @State private var showAccountPicker = false
     @State private var accounts: [ASCCredentials] = []
+    @State private var pendingRemoval: PendingRemoval?
+    @State private var errorMessage: String?
+
+    private enum PendingRemoval: Identifiable {
+        case active(String)
+        case all
+
+        var id: String {
+            switch self {
+            case .active(let name): return "active-\(name)"
+            case .all: return "all"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .active(let name): return "Remove “\(name)”?"
+            case .all: return "Disconnect all accounts?"
+            }
+        }
+
+        var message: String {
+            switch self {
+            case .active:
+                return "The API key is removed from your Keychain. Apps and snapshots already on this Mac are kept."
+            case .all:
+                return "Every App Store Connect API key is removed from your Keychain and you'll return to onboarding."
+            }
+        }
+
+        var confirmLabel: String {
+            switch self {
+            case .active: return "Remove Account"
+            case .all: return "Disconnect All"
+            }
+        }
+    }
 
     var body: some View {
         List(selection: $selectedApp) {
@@ -58,13 +95,13 @@ struct AppSidebarView: View {
 
                     if let credentials {
                         Button("Remove “\(credentials.name)”", role: .destructive) {
-                            removeActiveAccount()
+                            pendingRemoval = .active(credentials.name)
                         }
                     }
 
                     if accounts.count > 1 {
                         Button("Disconnect All Accounts", role: .destructive) {
-                            disconnectAll()
+                            pendingRemoval = .all
                         }
                     }
                 } label: {
@@ -112,6 +149,35 @@ struct AppSidebarView: View {
                 existingAccounts: accounts,
                 initiallyShowForm: false
             )
+        }
+        .confirmationDialog(
+            pendingRemoval?.title ?? "",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingRemoval {
+                Button(pendingRemoval.confirmLabel, role: .destructive) {
+                    switch pendingRemoval {
+                    case .active: removeActiveAccount()
+                    case .all: disconnectAll()
+                    }
+                    self.pendingRemoval = nil
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingRemoval = nil }
+        } message: {
+            Text(pendingRemoval?.message ?? "")
+        }
+        .alert("Account Error", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
         }
         .onAppear { refreshAccounts() }
         .onChange(of: credentials?.id) { _, _ in
@@ -162,22 +228,30 @@ struct AppSidebarView: View {
             credentials = account
             selectedApp = nil
         } catch {
-            // Keep current selection if switch fails
+            errorMessage = "Could not switch to “\(account.name)”. \(error.localizedDescription)"
         }
     }
 
     private func removeActiveAccount() {
         guard let id = credentials?.id else { return }
-        credentials = try? KeychainService.shared.removeAccount(id: id)
-        selectedApp = nil
-        refreshAccounts()
+        do {
+            credentials = try KeychainService.shared.removeAccount(id: id)
+            selectedApp = nil
+            refreshAccounts()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func disconnectAll() {
-        try? KeychainService.shared.delete()
-        credentials = nil
-        selectedApp = nil
-        accounts = []
+        do {
+            try KeychainService.shared.delete()
+            credentials = nil
+            selectedApp = nil
+            accounts = []
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 

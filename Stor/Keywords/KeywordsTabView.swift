@@ -18,12 +18,12 @@ struct KeywordsTabView: View {
     @State private var asyncError: String?
     @State private var importMessage: String?
     @State private var searchAdsCredentials: SearchAdsCredentials?
-
-    private let baseCountries = ["US", "GB", "DE", "FR", "IT", "ES", "JP", "CA", "AU", "BR"]
+    @State private var trendKeyword: TrackedKeyword?
+    @State private var keywordPendingDeletion: TrackedKeyword?
 
     private var countries: [String] {
         let fromKeywords = Set(app.trackedKeywords.map(\.country))
-        return Array(Set(baseCountries).union(fromKeywords)).sorted()
+        return Array(Set(KeywordCountries.all).union(fromKeywords)).sorted()
     }
 
     var filteredKeywords: [TrackedKeyword] {
@@ -85,7 +85,9 @@ struct KeywordsTabView: View {
             searchAdsCredentials = try? KeychainService.shared.loadSearchAds()
         }
         .sheet(isPresented: $showAddKeyword) {
-            AddKeywordView(app: app, defaultCountry: selectedCountry)
+            AddKeywordView(app: app, defaultCountry: selectedCountry) { result in
+                if result.skipped > 0 { importMessage = result.summary() }
+            }
         }
         .sheet(isPresented: $showConnectAds) {
             AddSearchAdsKeyView { creds in
@@ -263,6 +265,7 @@ struct KeywordsTabView: View {
                     Text("Popularity").frame(width: 110, alignment: .leading)
                     Text("Updated").frame(width: 110, alignment: .leading)
                     Text("Rank").frame(width: 70, alignment: .leading)
+                    Text("Trend").frame(width: 80, alignment: .leading)
                     Color.clear.frame(width: 36)
                 }
                 .font(.caption)
@@ -271,12 +274,35 @@ struct KeywordsTabView: View {
             }
 
             ForEach(filteredKeywords) { keyword in
-                KeywordRow(keyword: keyword, isRefreshing: isRefreshing, isCheckingRankings: isCheckingRankings) {
-                    modelContext.delete(keyword)
-                }
+                KeywordRow(
+                    keyword: keyword,
+                    isRefreshing: isRefreshing,
+                    isCheckingRankings: isCheckingRankings,
+                    onShowTrend: { trendKeyword = keyword },
+                    onDelete: { keywordPendingDeletion = keyword }
+                )
             }
         }
         .listStyle(.inset)
+        .sheet(item: $trendKeyword) { keyword in
+            KeywordTrendSheet(keyword: keyword)
+        }
+        .confirmationDialog(
+            "Stop tracking “\(keywordPendingDeletion?.term ?? "")”?",
+            isPresented: Binding(
+                get: { keywordPendingDeletion != nil },
+                set: { if !$0 { keywordPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete Keyword", role: .destructive) {
+                if let keyword = keywordPendingDeletion { modelContext.delete(keyword) }
+                keywordPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { keywordPendingDeletion = nil }
+        } message: {
+            Text("Its popularity scores and ranking history are deleted too.")
+        }
     }
 
     private var emptyState: some View {
@@ -317,9 +343,13 @@ struct KeywordsTabView: View {
             return
         }
 
-        let added = insertKeywords(source.terms, locale: source.locale, country: selectedCountry)
-        let skipped = source.terms.count - added
-        importMessage = importSummary(added: added, skipped: skipped, detail: source.locale)
+        let result = app.insertKeywords(
+            source.terms,
+            locale: source.locale,
+            country: selectedCountry,
+            into: modelContext
+        )
+        importMessage = result.summary(detail: source.locale)
     }
 
     private func importSelectedSources(_ sources: [(locale: String, country: String, terms: [String])]) {
@@ -328,54 +358,23 @@ struct KeywordsTabView: View {
             return
         }
 
-        var added = 0
-        var considered = 0
+        var total = AppRecord.KeywordInsertResult()
         var countriesHit = Set<String>()
         for source in sources {
-            considered += source.terms.count
-            let count = insertKeywords(source.terms, locale: source.locale, country: source.country)
-            if count > 0 { countriesHit.insert(source.country) }
-            added += count
+            let result = app.insertKeywords(
+                source.terms,
+                locale: source.locale,
+                country: source.country,
+                into: modelContext
+            )
+            if result.added > 0 { countriesHit.insert(source.country) }
+            total.added += result.added
+            total.skipped += result.skipped
         }
-        let skipped = considered - added
         let localeCount = sources.count
         let detail = "\(localeCount) locale\(localeCount == 1 ? "" : "s")"
             + (countriesHit.isEmpty ? "" : " · \(countriesHit.count) countr\(countriesHit.count == 1 ? "y" : "ies")")
-        importMessage = importSummary(added: added, skipped: skipped, detail: detail)
-    }
-
-    @discardableResult
-    private func insertKeywords(_ terms: [String], locale: String, country: String) -> Int {
-        let existing = Set(
-            app.trackedKeywords
-                .filter { $0.country.caseInsensitiveCompare(country) == .orderedSame }
-                .map { $0.term.lowercased() }
-        )
-        var added = 0
-        var seen = existing
-        for term in terms {
-            let key = term.lowercased()
-            guard !seen.contains(key) else { continue }
-            seen.insert(key)
-            let kw = TrackedKeyword(term: term, locale: locale, country: country)
-            kw.app = app
-            app.trackedKeywords.append(kw)
-            modelContext.insert(kw)
-            added += 1
-        }
-        return added
-    }
-
-    private func importSummary(added: Int, skipped: Int, detail: String) -> String {
-        if added == 0 {
-            return skipped == 0
-                ? "No keywords to import."
-                : "All \(skipped) listing keyword\(skipped == 1 ? "" : "s") are already tracked."
-        }
-        if skipped == 0 {
-            return "Added \(added) keyword\(added == 1 ? "" : "s") from \(detail)."
-        }
-        return "Added \(added) keyword\(added == 1 ? "" : "s") from \(detail). Skipped \(skipped) duplicate\(skipped == 1 ? "" : "s")."
+        importMessage = total.summary(detail: detail)
     }
 
     private func parseKeywordTerms(_ raw: String?) -> [String] {
@@ -386,15 +385,6 @@ struct KeywordsTabView: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-    }
-
-    private func countryCode(fromLocale locale: String) -> String? {
-        let parts = locale.replacingOccurrences(of: "_", with: "-").split(separator: "-").map(String.init)
-        guard let region = parts.last, region.count == 2, region.allSatisfy(\.isLetter) else {
-            return nil
-        }
-        // Script codes like "Hans" are 4 letters; 2-letter suffix is the region.
-        return region.uppercased()
     }
 
     private func refreshPopularity() {
@@ -558,11 +548,12 @@ private struct KeywordRow: View {
     let keyword: TrackedKeyword
     let isRefreshing: Bool
     let isCheckingRankings: Bool
+    let onShowTrend: () -> Void
     let onDelete: () -> Void
 
-    var latestRanking: KeywordRanking? {
-        keyword.rankingHistory.sorted { $0.checkedAt > $1.checkedAt }.first
-    }
+    /// Computed once per body evaluation and shared by the rank cell and the sparkline,
+    /// rather than re-sorting the history for each.
+    private var points: [RankPoint] { keyword.rankPoints }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -600,18 +591,19 @@ private struct KeywordRow: View {
             }
 
             Group {
-                if isCheckingRankings && latestRanking == nil {
+                let latest = points.last
+                if isCheckingRankings && latest == nil {
                     ProgressView()
                         .controlSize(.small)
                         .frame(width: 70, height: 14, alignment: .leading)
-                } else if let pos = latestRanking?.position {
+                } else if let pos = latest?.position {
                     Text("#\(pos)")
                         .font(.body)
                         .fontWeight(.medium)
                         .monospacedDigit()
                         .foregroundStyle(pos <= 10 ? .green : .primary)
                         .frame(width: 70, alignment: .leading)
-                } else if latestRanking != nil {
+                } else if latest != nil {
                     Text(">200")
                         .font(.body)
                         .foregroundStyle(.tertiary)
@@ -624,13 +616,28 @@ private struct KeywordRow: View {
                 }
             }
 
+            Button(action: onShowTrend) {
+                RankSparkline(points: points)
+                    .frame(width: 72, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .frame(width: 80, alignment: .leading)
+            .help("Show ranking history")
+
             Button(role: .destructive, action: onDelete) {
                 Image(systemName: "trash").foregroundStyle(.red.opacity(0.7))
             }
             .buttonStyle(.borderless)
             .frame(width: 36)
+            .accessibilityLabel("Delete keyword \(keyword.term)")
         }
         .padding(.vertical, 4)
+        .contextMenu {
+            Button("Show Ranking History", action: onShowTrend)
+            Divider()
+            Button("Delete Keyword", role: .destructive, action: onDelete)
+        }
     }
 }
 
