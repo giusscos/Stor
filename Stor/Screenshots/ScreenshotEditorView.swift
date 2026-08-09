@@ -391,8 +391,13 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
         NSRect(origin: .zero, size: size).fill()
     }
 
+    // Point values (font size, padding, radii) are authored against a 375pt reference
+    // width — the same reference the canvas preview uses — so scale them up for the
+    // full-resolution bitmap to keep the export WYSIWYG with the canvas.
+    let exportScale = size.width / 375
+
     for layer in template.layers where layer.isVisible {
-        let layerSize = layer.resolvedSize(in: size, locale: locale, fontScale: 1)
+        let layerSize = layer.resolvedSize(in: size, locale: locale, fontScale: exportScale)
         let rect = CGRect(
             x: layer.xFraction * size.width,
             y: (1 - layer.yFraction) * size.height - layerSize.height,
@@ -402,43 +407,43 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
         switch layer.type {
         case .text:
             if let bgHex = layer.textBackgroundHex {
-                let path = NSBezierPath(
-                    roundedRect: rect,
-                    xRadius: layer.textCornerRadiusPt,
-                    yRadius: layer.textCornerRadiusPt
-                )
+                let radius = layer.textCornerRadiusPt * exportScale
+                let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
                 NSColor(Color(hex: bgHex)).setFill()
                 path.fill()
             }
-            let pad = layer.textPaddingPt
+            let pad = layer.textPaddingPt * exportScale
             let textRect = rect.insetBy(dx: pad, dy: pad)
-            if let attributed = layer.resolvedAttributedString(for: locale, fontSize: layer.fontSizePt) {
+            if let attributed = layer.resolvedAttributedString(
+                for: locale,
+                fontSize: layer.fontSizePt * exportScale,
+                scale: exportScale
+            ) {
                 attributed.draw(in: textRect)
             }
         case .image:
             if let data = layer.imageData,
                let img = ImageCache.shared.image(for: data, id: layer.id) {
-                let radius = layer.imageCornerRadius
-                // Compute the draw rect: fill crops to rect, fit letterboxes centered.
-                let drawRect: CGRect
-                if layer.imageFills {
-                    drawRect = rect
-                } else {
-                    let iw = img.size.width, ih = img.size.height
-                    let scale = max(rect.width / iw, rect.height / ih)
-                    let fw = iw * scale, fh = ih * scale
-                    drawRect = CGRect(
-                        x: rect.midX - fw / 2, y: rect.midY - fh / 2, width: fw, height: fh
-                    )
-                }
+                let radius = layer.imageCornerRadius * exportScale
+
+                // The bitmap context has a bottom-left origin, while imageContentRect
+                // works in top-left space — flip the offset's Y for the shared math.
+                var contentLayer = layer
+                contentLayer.contentOffsetY = -layer.contentOffsetY
+                let drawRect = contentLayer.imageContentRect(imageSize: img.size, in: rect)
+
+                NSGraphicsContext.saveGraphicsState()
                 if radius > 0 {
-                    NSGraphicsContext.saveGraphicsState()
-                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).setClip()
-                    img.draw(in: drawRect)
-                    NSGraphicsContext.restoreGraphicsState()
+                    // Round the image's own corners (visible in fit mode) and the layer
+                    // bounds (visible in fill/zoomed mode) — mirrors the preview clips.
+                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
+                    NSBezierPath(roundedRect: drawRect, xRadius: radius, yRadius: radius).addClip()
                 } else {
-                    img.draw(in: drawRect)
+                    NSBezierPath(rect: rect).addClip()
                 }
+                img.draw(in: drawRect)
+                NSGraphicsContext.restoreGraphicsState()
+
                 if let assetName = layer.frameAssetName,
                    let frameImg = NSImage(named: assetName) {
                     frameImg.draw(in: rect)
@@ -555,6 +560,8 @@ private struct TemplateEditorView: View {
     @State private var showAddImage = false
     @State private var canvasZoom: CGFloat = 1.0
     @State private var centerRequest = 0
+    /// Layer state previewed while an inspector slider drags; committed on release.
+    @State private var livePreviewLayer: ScreenshotLayer?
 
     private let canvasBaseWidth: CGFloat = 320
     private let zoomStep: CGFloat = 0.25
@@ -620,7 +627,8 @@ private struct TemplateEditorView: View {
                 ScreenshotCanvas(
                     template: template,
                     selectedLayerId: $selectedLayerId,
-                    previewLocale: previewLocale
+                    previewLocale: previewLocale,
+                    liveOverrideLayer: livePreviewLayer
                 )
                     .frame(
                         width: canvasBaseWidth,
@@ -790,7 +798,8 @@ private struct TemplateEditorView: View {
                             previewLocale: previewLocale,
                             primaryLocale: primaryLocale,
                             availableLocales: availableLocales,
-                            onLocaleChange: onLocaleChange
+                            onLocaleChange: onLocaleChange,
+                            livePreview: $livePreviewLayer
                         )
                     }
                 }
@@ -813,6 +822,7 @@ private struct TemplateEditorView: View {
         newLayer.imageData = data
         newLayer.heightFraction = 0.4
         newLayer.yFraction = 0.3
+        ImageLayerStyleStore.shared.applyDefault(to: &newLayer)
         template.layers.append(newLayer)
         selectedLayerId = newLayer.id
     }
@@ -824,6 +834,9 @@ private struct ScreenshotCanvas: View {
     let template: ScreenshotTemplate
     @Binding var selectedLayerId: UUID?
     var previewLocale: String? = nil
+    /// In-flight layer state while an inspector slider is dragging — rendered in place
+    /// of the committed layer so changes show live without a model write per tick.
+    var liveOverrideLayer: ScreenshotLayer? = nil
     var isInteractive: Bool = true
     @State private var dragStart: [UUID: CGPoint] = [:]
     @State private var dragOverride: (id: UUID, x: Double, y: Double)?
@@ -892,10 +905,15 @@ private struct ScreenshotCanvas: View {
     @ViewBuilder
     private func layerView(_ layer: ScreenshotLayer, in size: CGSize) -> some View {
         let effective: ScreenshotLayer = {
-            if let o = dragOverride, o.id == layer.id {
-                var c = layer; c.xFraction = o.x; c.yFraction = o.y; return c
+            var base = layer
+            if let live = liveOverrideLayer, live.id == layer.id {
+                base = live
             }
-            return layer
+            if let o = dragOverride, o.id == layer.id {
+                base.xFraction = o.x
+                base.yFraction = o.y
+            }
+            return base
         }()
         let scale = size.width / 375
         let frame = effective.resolvedFrame(in: size, locale: previewLocale, fontScale: scale)
@@ -904,23 +922,23 @@ private struct ScreenshotCanvas: View {
         let x = frame.minX
         let y = frame.minY
 
-        switch layer.type {
+        switch effective.type {
         case .text:
-            let pad = layer.textPaddingPt * scale
-            let radius = layer.textCornerRadiusPt * scale
-            layer.resolvedPreviewText(
+            let pad = effective.textPaddingPt * scale
+            let radius = effective.textCornerRadiusPt * scale
+            effective.resolvedPreviewText(
                 for: previewLocale,
-                fontSize: layer.fontSizePt * scale,
+                fontSize: effective.fontSizePt * scale,
                 scale: scale
             )
             .multilineTextAlignment(
-                layer.textAlignment == .leading ? .leading :
-                    layer.textAlignment == .trailing ? .trailing : .center
+                effective.textAlignment == .leading ? .leading :
+                    effective.textAlignment == .trailing ? .trailing : .center
             )
             .padding(pad)
-            .frame(width: w, height: h, alignment: layer.textAlignment.swiftUI)
+            .frame(width: w, height: h, alignment: effective.textAlignment.swiftUI)
             .background {
-                if let bgHex = layer.textBackgroundHex {
+                if let bgHex = effective.textBackgroundHex {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(Color(hex: bgHex))
                 }
@@ -928,18 +946,29 @@ private struct ScreenshotCanvas: View {
             .position(x: x + w / 2, y: y + h / 2)
 
         case .image:
-            if let data = layer.imageData,
-               let img = ImageCache.shared.image(for: data, id: effective.id) {
-                let cornerRadius = layer.imageCornerRadius * scale
-                let contentMode: ContentMode = layer.imageFills ? .fill : .fit
+            if let data = effective.imageData,
+               let img = ImageCache.shared.previewImage(for: data, id: effective.id) {
+                let cornerRadius = effective.imageCornerRadius * scale
+                let contentRect = effective.imageContentRect(
+                    imageSize: img.size,
+                    in: CGRect(x: 0, y: 0, width: w, height: h)
+                )
                 ZStack {
+                    // Radius clips the image's own rect (rounds square screenshots in
+                    // fit mode) and the outer clip below rounds the layer bounds when
+                    // the content covers them (fill / zoomed in).
                     Image(nsImage: img)
                         .resizable()
-                        .aspectRatio(contentMode: contentMode)
+                        .frame(width: contentRect.width, height: contentRect.height)
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                        .offset(
+                            x: contentRect.midX - w / 2,
+                            y: contentRect.midY - h / 2
+                        )
                         .frame(width: w, height: h)
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
 
-                    if let assetName = layer.frameAssetName,
+                    if let assetName = effective.frameAssetName,
                        let frameImg = NSImage(named: assetName) {
                         Image(nsImage: frameImg)
                             .resizable()
@@ -973,6 +1002,9 @@ private struct ScreenshotCanvas: View {
         newLayer.heightFraction = 0.5
         newLayer.xFraction = xFrac
         newLayer.yFraction = yFrac
+        // A saved default wins over the drop location so framed screenshots land in
+        // the same spot on every template.
+        ImageLayerStyleStore.shared.applyDefault(to: &newLayer)
         template.layers.append(newLayer)
         selectedLayerId = newLayer.id
     }
@@ -1644,9 +1676,25 @@ private struct LayerPropertiesView: View {
     var primaryLocale: String
     var availableLocales: [String]
     var onLocaleChange: (String) -> Void
+    @Binding var livePreview: ScreenshotLayer?
 
+    @ObservedObject private var styleStore = ImageLayerStyleStore.shared
     @State private var activeMarkdownFormats: Set<MarkdownInlineFormat> = []
     @State private var pendingMarkdownAction: MarkdownEditorAction?
+
+    /// Live-preview hook for a buffered slider: renders the in-flight value on the
+    /// canvas by overriding one property on top of the committed layer.
+    private func liveUpdate(_ keyPath: WritableKeyPath<ScreenshotLayer, Double>) -> (Double) -> Void {
+        { newValue in
+            var preview = layer
+            preview[keyPath: keyPath] = newValue
+            livePreview = preview
+        }
+    }
+
+    private func endLivePreview() {
+        livePreview = nil
+    }
 
     private var fontFamilies: [String] { ScreenshotFontFamily.allFamilies }
 
@@ -1654,6 +1702,44 @@ private struct LayerPropertiesView: View {
         Binding(
             get: { layer.resolvedText(for: previewLocale) ?? "" },
             set: { layer.setResolvedText($0, for: previewLocale, primaryLocale: primaryLocale) }
+        )
+    }
+
+    /// Picker selection is the option id (device + color); orientation is preserved
+    /// across option changes when the new option also has a landscape variant.
+    private var frameOptionBinding: Binding<String?> {
+        Binding(
+            get: {
+                guard let asset = layer.frameAssetName else { return nil }
+                return DeviceFrameOption.option(forAsset: asset)?.id ?? asset
+            },
+            set: { newId in
+                guard let newId, let option = DeviceFrameOption.all.first(where: { $0.id == newId }) else {
+                    layer.frameAssetName = nil
+                    return
+                }
+                let wasLandscape = layer.frameAssetName.flatMap {
+                    DeviceFrameOption.option(forAsset: $0)?.landscapeAsset == $0
+                } ?? false
+                layer.frameAssetName = (wasLandscape ? option.landscapeAsset : nil) ?? option.portraitAsset
+            }
+        )
+    }
+
+    private var frameLandscapeBinding: Binding<Bool> {
+        Binding(
+            get: {
+                guard let asset = layer.frameAssetName,
+                      let option = DeviceFrameOption.option(forAsset: asset) else { return false }
+                return option.landscapeAsset == asset
+            },
+            set: { landscape in
+                guard let asset = layer.frameAssetName,
+                      let option = DeviceFrameOption.option(forAsset: asset) else { return }
+                layer.frameAssetName = landscape
+                    ? (option.landscapeAsset ?? option.portraitAsset)
+                    : option.portraitAsset
+            }
         )
     }
 
@@ -1814,15 +1900,12 @@ private struct LayerPropertiesView: View {
                 InspectorSection(title: "Image") {
                     VStack(alignment: .leading, spacing: 10) {
                         InspectorLabeledRow("Frame") {
-                            Picker("", selection: Binding(
-                                get: { layer.frameAssetName },
-                                set: { layer.frameAssetName = $0 }
-                            )) {
+                            Picker("", selection: frameOptionBinding) {
                                 Text("None").tag(nil as String?)
                                 ForEach(DeviceFrameOption.orderedGroups, id: \.self) { group in
                                     Section(group) {
                                         ForEach(DeviceFrameOption.options(in: group)) { option in
-                                            Text(option.label).tag(option.assetName as String?)
+                                            Text(option.label).tag(option.id as String?)
                                         }
                                     }
                                 }
@@ -1830,6 +1913,14 @@ private struct LayerPropertiesView: View {
                             .labelsHidden()
                             .pickerStyle(.menu)
                             .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+
+                        if let assetName = layer.frameAssetName,
+                           DeviceFrameOption.option(forAsset: assetName)?.landscapeAsset != nil {
+                            Toggle("Landscape", isOn: frameLandscapeBinding)
+                                .toggleStyle(.checkbox)
+                                .controlSize(.small)
+                                .help("Use the landscape version of this device frame")
                         }
 
                         Toggle("Fill frame", isOn: Binding(
@@ -1843,8 +1934,89 @@ private struct LayerPropertiesView: View {
                         BufferedValueSlider(
                             title: "Radius",
                             value: Binding(get: { layer.imageCornerRadius }, set: { layer.imageCornerRadius = $0 }),
-                            range: 0...120
+                            range: 0...120,
+                            onLiveChange: liveUpdate(\.imageCornerRadius),
+                            onEditEnd: endLivePreview
                         )
+
+                        Divider()
+
+                        Text("Content")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        BufferedPercentSlider(
+                            title: "Scale",
+                            value: Binding(get: { layer.contentScale }, set: { layer.contentScale = $0 }),
+                            range: 0.25...3,
+                            onLiveChange: liveUpdate(\.contentScale),
+                            onEditEnd: endLivePreview
+                        )
+                        BufferedPercentSlider(
+                            title: "Offset X",
+                            value: Binding(get: { layer.contentOffsetX }, set: { layer.contentOffsetX = $0 }),
+                            range: -0.5...0.5,
+                            onLiveChange: liveUpdate(\.contentOffsetX),
+                            onEditEnd: endLivePreview
+                        )
+                        BufferedPercentSlider(
+                            title: "Offset Y",
+                            value: Binding(get: { layer.contentOffsetY }, set: { layer.contentOffsetY = $0 }),
+                            range: -0.5...0.5,
+                            onLiveChange: liveUpdate(\.contentOffsetY),
+                            onEditEnd: endLivePreview
+                        )
+
+                        Button("Reset Position") {
+                            layer.contentScale = 1
+                            layer.contentOffsetX = 0
+                            layer.contentOffsetY = 0
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(layer.contentScale == 1 && layer.contentOffsetX == 0 && layer.contentOffsetY == 0)
+                        .help("Undo scale and offset — back to automatic fit")
+
+                        Divider()
+
+                        Text("Style")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 8) {
+                            Button("Copy") {
+                                styleStore.copied = ImageLayerStyle(from: layer)
+                            }
+                            .help("Copy frame, fill, radius, scale/offset and layout from this image")
+
+                            Button("Paste") {
+                                if let style = styleStore.copied {
+                                    var updated = layer
+                                    style.apply(to: &updated)
+                                    layer = updated
+                                }
+                            }
+                            .disabled(styleStore.copied == nil)
+                            .help("Apply the copied image style to this layer")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button(styleStore.savedDefault == nil ? "Make Default for New Images" : "Update Default for New Images") {
+                            styleStore.saveAsDefault(ImageLayerStyle(from: layer))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("New image layers (added or dropped) start with this frame, fill, radius, scale and layout")
+
+                        if styleStore.savedDefault != nil {
+                            Button("Clear Default") {
+                                styleStore.clearDefault()
+                            }
+                            .buttonStyle(.borderless)
+                            .controlSize(.small)
+                            .help("New image layers go back to the plain automatic setup")
+                        }
 
                         if let assetName = layer.frameAssetName,
                            let img = NSImage(named: assetName) {
@@ -1865,25 +2037,27 @@ private struct LayerPropertiesView: View {
 
             InspectorSection(title: "Layout") {
                 VStack(alignment: .leading, spacing: 10) {
-                    layoutSlider("X", value: $layer.xFraction, range: -0.5...0.95)
-                    layoutSlider("Y", value: $layer.yFraction, range: 0...0.9)
+                    layoutSlider("X", value: $layer.xFraction, range: -0.5...0.95, live: \.xFraction)
+                    layoutSlider("Y", value: $layer.yFraction, range: 0...0.9, live: \.yFraction)
 
                     if layer.type == .text {
                         layoutFitSlider(
                             "Width",
                             value: $layer.widthFraction,
                             range: 0.05...1.0,
-                            fit: $layer.fitWidthToContent
+                            fit: $layer.fitWidthToContent,
+                            live: \.widthFraction
                         )
                         layoutFitSlider(
                             "Height",
                             value: $layer.heightFraction,
                             range: 0.02...1.0,
-                            fit: $layer.fitHeightToContent
+                            fit: $layer.fitHeightToContent,
+                            live: \.heightFraction
                         )
                     } else {
-                        layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.5)
-                        layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.5)
+                        layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.5, live: \.widthFraction)
+                        layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.5, live: \.heightFraction)
                     }
 
                     Toggle("Visible", isOn: $layer.isVisible)
@@ -1966,15 +2140,27 @@ private struct LayerPropertiesView: View {
         }
     }
 
-    private func layoutSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        BufferedPercentSlider(title: title, value: value, range: range)
+    private func layoutSlider(
+        _ title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>,
+        live keyPath: WritableKeyPath<ScreenshotLayer, Double>
+    ) -> some View {
+        BufferedPercentSlider(
+            title: title,
+            value: value,
+            range: range,
+            onLiveChange: liveUpdate(keyPath),
+            onEditEnd: endLivePreview
+        )
     }
 
     private func layoutFitSlider(
         _ title: String,
         value: Binding<Double>,
         range: ClosedRange<Double>,
-        fit: Binding<Bool>
+        fit: Binding<Bool>,
+        live keyPath: WritableKeyPath<ScreenshotLayer, Double>
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             InspectorLabeledRow(title) {
@@ -1984,11 +2170,12 @@ private struct LayerPropertiesView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 } else {
-                    Slider(value: value, in: range)
-                    Text(String(format: "%.0f%%", value.wrappedValue * 100))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .frame(width: 36, alignment: .trailing)
+                    BufferedFitSlider(
+                        value: value,
+                        range: range,
+                        onLiveChange: liveUpdate(keyPath),
+                        onEditEnd: endLivePreview
+                    )
                 }
             }
             Toggle("Fit to content", isOn: fit)
@@ -2007,12 +2194,15 @@ private struct LayerPropertiesView: View {
 
 // MARK: - Buffered sliders (no model writes during drag)
 
-/// Percent-formatted slider (0.0–1.5 → "0%–150%") that only commits to the model on drag end.
-/// Eliminates per-frame SwiftUI canvas re-renders while the thumb is moving.
+/// Percent-formatted slider (0.0–1.5 → "0%–150%") that only commits to the model on drag
+/// end, avoiding a full layers re-encode per tick. `onLiveChange` fires on every tick so
+/// the canvas can render the in-flight value through a lightweight preview override.
 private struct BufferedPercentSlider: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    var onLiveChange: ((Double) -> Void)? = nil
+    var onEditEnd: (() -> Void)? = nil
 
     @State private var local: Double = 0
     @State private var dragging = false
@@ -2021,7 +2211,10 @@ private struct BufferedPercentSlider: View {
         InspectorLabeledRow(title) {
             Slider(value: $local, in: range) { editing in
                 dragging = editing
-                if !editing { value = local }
+                if !editing {
+                    value = local
+                    onEditEnd?()
+                }
             }
             Text(String(format: "%.0f%%", local * 100))
                 .font(.caption.monospacedDigit())
@@ -2029,16 +2222,20 @@ private struct BufferedPercentSlider: View {
                 .frame(width: 36, alignment: .trailing)
         }
         .onAppear { local = value }
+        .onChange(of: local) { _, v in if dragging { onLiveChange?(v) } }
         .onChange(of: value) { _, v in if !dragging { local = v } }
     }
 }
 
-/// Plain numeric slider (e.g. corner radius 0–120) that only commits to the model on drag end.
+/// Plain numeric slider (e.g. corner radius 0–120) that only commits to the model on drag
+/// end. Same live-preview hooks as `BufferedPercentSlider`.
 private struct BufferedValueSlider: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
     var step: Double = 1
+    var onLiveChange: ((Double) -> Void)? = nil
+    var onEditEnd: (() -> Void)? = nil
 
     @State private var local: Double = 0
     @State private var dragging = false
@@ -2047,7 +2244,10 @@ private struct BufferedValueSlider: View {
         InspectorLabeledRow(title) {
             Slider(value: $local, in: range, step: step) { editing in
                 dragging = editing
-                if !editing { value = local }
+                if !editing {
+                    value = local
+                    onEditEnd?()
+                }
             }
             Text("\(Int(local))")
                 .font(.caption.monospacedDigit())
@@ -2055,7 +2255,37 @@ private struct BufferedValueSlider: View {
                 .frame(width: 28, alignment: .trailing)
         }
         .onAppear { local = value }
+        .onChange(of: local) { _, v in if dragging { onLiveChange?(v) } }
         .onChange(of: value) { _, v in if !dragging { local = v } }
+    }
+}
+
+/// Title-less buffered percent slider for use inside an existing labeled row
+/// (the Width/Height rows that also carry the "Fit to content" toggle).
+private struct BufferedFitSlider: View {
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var onLiveChange: ((Double) -> Void)? = nil
+    var onEditEnd: (() -> Void)? = nil
+
+    @State private var local: Double = 0
+    @State private var dragging = false
+
+    var body: some View {
+        Slider(value: $local, in: range) { editing in
+            dragging = editing
+            if !editing {
+                value = local
+                onEditEnd?()
+            }
+        }
+        Text(String(format: "%.0f%%", local * 100))
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .frame(width: 36, alignment: .trailing)
+            .onAppear { local = value }
+            .onChange(of: local) { _, v in if dragging { onLiveChange?(v) } }
+            .onChange(of: value) { _, v in if !dragging { local = v } }
     }
 }
 
