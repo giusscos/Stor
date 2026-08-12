@@ -42,6 +42,17 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
             width: layerSize.width,
             height: layerSize.height
         )
+
+        // Apply rotation around the layer center. CG uses Y-up coords so negate the angle.
+        if layer.rotation != 0 {
+            NSGraphicsContext.saveGraphicsState()
+            let t = NSAffineTransform()
+            t.translateX(by: rect.midX, yBy: rect.midY)
+            t.rotate(byDegrees: -layer.rotation)
+            t.translateX(by: -rect.midX, yBy: -rect.midY)
+            t.concat()
+        }
+
         switch layer.type {
         case .text:
             if let bgHex = layer.textBackgroundHex {
@@ -61,7 +72,7 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
             }
         case .image:
             if let img = layer.loadImage() {
-                let radius = layer.imageCornerRadius * exportScale
+                let radius = layer.imageCornerRadius * exportScale * max(0.01, layer.frameScale)
 
                 // The bitmap context has a bottom-left origin, while imageContentRect
                 // works in top-left space — flip the offset's Y for the shared math.
@@ -96,6 +107,10 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
             if let shapeImage = shapeRenderer.nsImage {
                 shapeImage.draw(in: rect)
             }
+        }
+
+        if layer.rotation != 0 {
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
 

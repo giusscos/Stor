@@ -128,6 +128,8 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     var imageCornerRadius: Double
     /// When true, image scales to fill the layer bounds (cropping if needed). False = fit (letterbox).
     var imageFills: Bool
+    /// Uniform scale applied to both width and height of the layer (image + frame together). 1 = natural size.
+    var frameScale: Double
     /// Extra zoom applied to the image content on top of fit/fill (1 = automatic size).
     var contentScale: Double
     /// Content nudge inside the layer, as a fraction of the layer's width/height.
@@ -165,6 +167,9 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     /// Only set when decoding a template saved before images moved out of the layer JSON.
     /// Cleared by `ScreenshotLayer.migrateEmbeddedImages` and never re-encoded.
     private var embeddedImageData: Data?
+
+    // Rotation (degrees, clockwise)
+    var rotation: Double
 
     // Shape layer
     var shapeKindRaw: String
@@ -284,6 +289,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         self.frameAssetName = nil
         self.imageCornerRadius = 0
         self.imageFills = false
+        self.frameScale = 1
         self.contentScale = 1
         self.contentOffsetX = 0
         self.contentOffsetY = 0
@@ -305,6 +311,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         self.fitHeightToContent = false
         self.imageRef = nil
         self.embeddedImageData = nil
+        self.rotation = 0
         self.shapeKindRaw = ShapeKind.rectangle.rawValue
         self.shapeEffectRaw = ShapeEffect.none.rawValue
         self.shapeFill = type == .shape ? CanvasBackground.shapeDefault : nil
@@ -343,6 +350,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id, type, name, xFraction, yFraction, widthFraction, heightFraction, isVisible, frameAssetName, imageCornerRadius, imageFills
+        case frameScale
         case contentScale, contentOffsetX, contentOffsetY
         case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
         case textBackgroundHex, textPaddingPt, textCornerRadiusPt, textUsesMarkdown
@@ -350,6 +358,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         case imageRef
         /// Legacy key: inline bytes from templates saved before the image store existed.
         case imageData
+        case rotation
         case shapeKindRaw, shapeEffectRaw, shapeFill, shapeCornerRadiusPt, shapeBlurRadius, shapeOpacity
         case shapeStrokeColorHex, shapeStrokeWidth
     }
@@ -367,6 +376,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         frameAssetName = try c.decodeIfPresent(String.self, forKey: .frameAssetName)
         imageCornerRadius = try c.decodeIfPresent(Double.self, forKey: .imageCornerRadius) ?? 0
         imageFills = try c.decodeIfPresent(Bool.self, forKey: .imageFills) ?? false
+        frameScale = try c.decodeIfPresent(Double.self, forKey: .frameScale) ?? 1
         contentScale = try c.decodeIfPresent(Double.self, forKey: .contentScale) ?? 1
         contentOffsetX = try c.decodeIfPresent(Double.self, forKey: .contentOffsetX) ?? 0
         contentOffsetY = try c.decodeIfPresent(Double.self, forKey: .contentOffsetY) ?? 0
@@ -392,6 +402,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         embeddedImageData = imageRef == nil
             ? try c.decodeIfPresent(Data.self, forKey: .imageData)
             : nil
+        rotation = try c.decodeIfPresent(Double.self, forKey: .rotation) ?? 0
         shapeKindRaw = try c.decodeIfPresent(String.self, forKey: .shapeKindRaw) ?? ShapeKind.rectangle.rawValue
         shapeEffectRaw = try c.decodeIfPresent(String.self, forKey: .shapeEffectRaw) ?? ShapeEffect.none.rawValue
         shapeFill = try c.decodeIfPresent(CanvasBackground.self, forKey: .shapeFill)
@@ -416,6 +427,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         try c.encodeIfPresent(frameAssetName, forKey: .frameAssetName)
         try c.encode(imageCornerRadius, forKey: .imageCornerRadius)
         try c.encode(imageFills, forKey: .imageFills)
+        try c.encode(frameScale, forKey: .frameScale)
         try c.encode(contentScale, forKey: .contentScale)
         try c.encode(contentOffsetX, forKey: .contentOffsetX)
         try c.encode(contentOffsetY, forKey: .contentOffsetY)
@@ -436,6 +448,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         try c.encode(fitWidthToContent, forKey: .fitWidthToContent)
         try c.encode(fitHeightToContent, forKey: .fitHeightToContent)
         try c.encodeIfPresent(imageRef, forKey: .imageRef)
+        try c.encode(rotation, forKey: .rotation)
         try c.encode(shapeKindRaw, forKey: .shapeKindRaw)
         try c.encode(shapeEffectRaw, forKey: .shapeEffectRaw)
         try c.encodeIfPresent(shapeFill, forKey: .shapeFill)
@@ -494,6 +507,7 @@ struct ImageLayerStyle: Codable, Equatable {
     var frameAssetName: String?
     var imageFills: Bool
     var imageCornerRadius: Double
+    var frameScale: Double
     var contentScale: Double
     var contentOffsetX: Double
     var contentOffsetY: Double
@@ -502,6 +516,7 @@ struct ImageLayerStyle: Codable, Equatable {
         frameAssetName = layer.frameAssetName
         imageFills = layer.imageFills
         imageCornerRadius = layer.imageCornerRadius
+        frameScale = layer.frameScale
         contentScale = layer.contentScale
         contentOffsetX = layer.contentOffsetX
         contentOffsetY = layer.contentOffsetY
@@ -511,6 +526,7 @@ struct ImageLayerStyle: Codable, Equatable {
         layer.frameAssetName = frameAssetName
         layer.imageFills = imageFills
         layer.imageCornerRadius = imageCornerRadius
+        layer.frameScale = frameScale
         layer.contentScale = contentScale
         layer.contentOffsetX = contentOffsetX
         layer.contentOffsetY = contentOffsetY

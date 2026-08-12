@@ -23,6 +23,8 @@ struct TemplateEditorView: View {
     @State private var clipboardLayer: ScreenshotLayer?
 
     private let canvasBaseWidth: CGFloat = 320
+    /// Grabbable area around the screenshot for layers dragged off-canvas.
+    private let canvasOverflowMargin: CGFloat = 160
     private let zoomStep: CGFloat = 0.25
     private let minZoom: CGFloat = 0.25
     private let maxZoom: CGFloat = 4.0
@@ -92,6 +94,7 @@ struct TemplateEditorView: View {
                     selectedLayerId: $selectedLayerId,
                     previewLocale: previewLocale,
                     liveOverrideLayer: livePreviewLayer,
+                    overflowHitMargin: canvasOverflowMargin,
                     onMutate: { name, change in mutate(name, change) }
                 )
                     .frame(
@@ -99,6 +102,10 @@ struct TemplateEditorView: View {
                         height: canvasBaseWidth / template.deviceType.aspectRatio
                     )
                     .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
+                    // Interactive margin: mouse events only reach SwiftUI within the
+                    // hosting view's frame, so this padding is what keeps layers
+                    // draggable after they're moved outside the screenshot bounds.
+                    .padding(canvasOverflowMargin)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 

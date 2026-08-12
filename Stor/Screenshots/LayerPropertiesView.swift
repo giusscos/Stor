@@ -532,8 +532,8 @@ struct LayerPropertiesView: View {
 
             InspectorSection(title: "Layout") {
                 VStack(alignment: .leading, spacing: 10) {
-                    layoutSlider("X", value: $layer.xFraction, range: -0.5...0.95, live: \.xFraction)
-                    layoutSlider("Y", value: $layer.yFraction, range: 0...0.9, live: \.yFraction)
+                    layoutSlider("X", value: $layer.xFraction, range: -1.0...1.0, live: \.xFraction)
+                    layoutSlider("Y", value: $layer.yFraction, range: -1.0...1.0, live: \.yFraction)
 
                     if layer.type == .text {
                         layoutFitSlider(
@@ -553,6 +553,16 @@ struct LayerPropertiesView: View {
                     } else {
                         layoutSlider("Width", value: $layer.widthFraction, range: 0.05...1.5, live: \.widthFraction)
                         layoutSlider("Height", value: $layer.heightFraction, range: 0.02...1.5, live: \.heightFraction)
+                        if layer.type == .image {
+                            BufferedPercentSlider(
+                                title: "Scale",
+                                value: Binding(get: { layer.frameScale }, set: { layer.frameScale = $0 }),
+                                range: 0.1...3.0,
+                                onLiveChange: liveUpdate(\.frameScale),
+                                onEditEnd: endLivePreview
+                            )
+                            .help("Scale the image and device frame together, keeping their proportions")
+                        }
                     }
 
                     Toggle("Visible", isOn: $layer.isVisible)

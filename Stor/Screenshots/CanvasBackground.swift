@@ -866,7 +866,8 @@ extension ScreenshotLayer {
         let fixedHeight = heightFraction * canvasSize.height
 
         guard type == .text, fitWidthToContent || fitHeightToContent else {
-            return CGSize(width: fixedWidth, height: fixedHeight)
+            let scale = (type == .image) ? max(0.01, frameScale) : 1.0
+            return CGSize(width: fixedWidth * scale, height: fixedHeight * scale)
         }
 
         let fontSize = fontSizePt * fontScale
