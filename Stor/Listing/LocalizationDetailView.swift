@@ -1,8 +1,11 @@
 import SwiftUI
+import SwiftData
 
 struct LocalizationDetailView: View {
     @Bindable var localization: LocalizedMetadata
+    var app: AppRecord?
     let isEditable: Bool
+    @State private var showBudget = false
 
     var hasAnyContent: Bool {
         localization.appName != nil || localization.subtitle != nil ||
@@ -29,8 +32,22 @@ struct LocalizationDetailView: View {
                     }
                 }
                 if let keywords = localization.keywords {
-                    KeywordsField(text: keywords, isEditable: isEditable) {
-                        localization.keywords = $0
+                    VStack(alignment: .leading, spacing: 8) {
+                        KeywordsField(text: keywords, isEditable: isEditable) {
+                            localization.keywords = $0
+                        }
+                        if isEditable, let app, countryCode(fromLocale: localization.locale) != nil {
+                            Button("Optimize Budget…") { showBudget = true }
+                                .font(.caption)
+                                .disabled(app.trackedKeywords.isEmpty)
+                        }
+                    }
+                    .sheet(isPresented: $showBudget) {
+                        if let app {
+                            KeywordBudgetSheet(app: app, localization: localization) { packed in
+                                localization.keywords = packed
+                            }
+                        }
                     }
                 }
                 if let promo = localization.promotionalText {

@@ -51,6 +51,33 @@ struct ASCAppStoreVersion: Codable {
         Self.editableStates.contains(attributes.appStoreState)
     }
 
+    /// Short label for pickers and badges.
+    var displayState: String {
+        Self.displayName(for: attributes.appStoreState)
+    }
+
+    static func displayName(for state: String) -> String {
+        switch state {
+        case "PREPARE_FOR_SUBMISSION": return "Prepare for Submission"
+        case "DEVELOPER_REJECTED": return "Developer Rejected"
+        case "REJECTED": return "Rejected"
+        case "METADATA_REJECTED": return "Metadata Rejected"
+        case "INVALID_BINARY": return "Invalid Binary"
+        case "READY_FOR_SALE": return "Ready for Sale"
+        case "IN_REVIEW": return "In Review"
+        case "WAITING_FOR_REVIEW": return "Waiting for Review"
+        case "PENDING_DEVELOPER_RELEASE": return "Pending Release"
+        case "PROCESSING_FOR_APP_STORE": return "Processing"
+        case "REPLACED_WITH_NEW_VERSION": return "Replaced"
+        case "DEVELOPER_REMOVED_FROM_SALE": return "Removed from Sale"
+        case "REMOVED_FROM_SALE": return "Removed from Sale"
+        default:
+            return state
+                .replacingOccurrences(of: "_", with: " ")
+                .localizedCapitalized
+        }
+    }
+
     /// Numeric components of `versionString`, for ordering releases like 1.10.0 above 1.9.0.
     var versionComponents: [Int] {
         attributes.versionString
@@ -111,7 +138,39 @@ struct ASCScreenshot: Codable, Identifiable {
     let attributes: Attributes
 
     struct Attributes: Codable {
+        let fileName: String?
+        let fileSize: Int?
+        let sourceFileChecksum: String?
+        let imageAsset: ImageAsset?
+        let displayPosition: Int?
+        let uploaded: Bool?
+        let assetDeliveryState: AssetDeliveryState?
         let uploadOperations: [UploadOperation]?
+
+        struct ImageAsset: Codable {
+            let templateUrl: String?
+            let width: Int?
+            let height: Int?
+
+            /// Preview URL with `{w}` `{h}` `{f}` placeholders filled in.
+            func previewURL(maxEdge: Int = 400) -> URL? {
+                guard var template = templateUrl, !template.isEmpty else { return nil }
+                let width = self.width ?? maxEdge
+                let height = self.height ?? maxEdge
+                let scale = min(1, Double(maxEdge) / Double(max(width, height)))
+                let w = max(1, Int(Double(width) * scale))
+                let h = max(1, Int(Double(height) * scale))
+                template = template
+                    .replacingOccurrences(of: "{w}", with: "\(w)")
+                    .replacingOccurrences(of: "{h}", with: "\(h)")
+                    .replacingOccurrences(of: "{f}", with: "png")
+                return URL(string: template)
+            }
+        }
+
+        struct AssetDeliveryState: Codable {
+            let state: String?
+        }
 
         struct UploadOperation: Codable {
             let method: String
@@ -126,6 +185,8 @@ struct ASCScreenshot: Codable, Identifiable {
             }
         }
     }
+
+    var position: Int { attributes.displayPosition ?? .max }
 }
 
 // MARK: - Error
@@ -327,6 +388,36 @@ final class ASCAPIClient {
         try await patch("/appScreenshots/\(screenshot.id)", body: commitBody)
     }
 
+    // MARK: - Screenshot sets
+
+    func fetchScreenshotSets(localizationId: String) async throws -> [ASCScreenshotSet] {
+        try await getAllPages(
+            ASCScreenshotSet.self,
+            path: "/appStoreVersionLocalizations/\(localizationId)/appScreenshotSets?limit=50"
+        )
+    }
+
+    func fetchScreenshots(setId: String) async throws -> [ASCScreenshot] {
+        let screenshots = try await getAllPages(
+            ASCScreenshot.self,
+            path: "/appScreenshotSets/\(setId)/appScreenshots?limit=50&fields[appScreenshots]=fileName,fileSize,sourceFileChecksum,imageAsset,displayPosition,uploaded,assetDeliveryState"
+        )
+        return screenshots.sorted { $0.position < $1.position }
+    }
+
+    func updateScreenshotPosition(id: String, position: Int) async throws {
+        let body: [String: Any] = ["data": [
+            "type": "appScreenshots",
+            "id": id,
+            "attributes": ["displayPosition": position]
+        ]]
+        try await patch("/appScreenshots/\(id)", body: body)
+    }
+
+    func deleteScreenshot(id: String) async throws {
+        try await delete("/appScreenshots/\(id)")
+    }
+
     // MARK: Private helpers
 
     private func createScreenshotSet(localizationId: String, displayType: String) async throws -> String {
@@ -371,6 +462,14 @@ final class ASCAPIClient {
 
     private func md5Hex(of data: Data) -> String {
         Insecure.MD5.hash(data: data).map { String(format: "%02hhx", $0) }.joined()
+    }
+
+    private func delete(_ path: String) async throws {
+        guard let url = URL(string: base + path) else { throw URLError(.badURL) }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(try jwt.generateToken(credentials: credentials))", forHTTPHeaderField: "Authorization")
+        _ = try await send(request)
     }
 
     private func patch(_ path: String, body: [String: Any]) async throws {

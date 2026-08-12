@@ -13,6 +13,9 @@ struct SettingsView: View {
             SearchAdsSettingsView()
                 .tabItem { Label("Search Ads", systemImage: "chart.bar") }
 
+            SyncSettingsView()
+                .tabItem { Label("Sync", systemImage: "arrow.clockwise") }
+
             StorageSettingsView()
                 .tabItem { Label("Storage", systemImage: "internaldrive") }
         }
@@ -333,6 +336,96 @@ private struct SearchAdsSettingsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+}
+
+// MARK: - Scheduled sync
+
+private struct SyncSettingsView: View {
+    @Query(sort: \AppRecord.name) private var apps: [AppRecord]
+    @State private var isRunning = false
+    @State private var status: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Stor refreshes due apps about every 15 minutes while this window is open, and again when the Mac wakes. Nothing runs after you quit the app.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if apps.isEmpty {
+                ContentUnavailableView(
+                    "No apps",
+                    systemImage: "arrow.clockwise",
+                    description: Text("Add an app from the sidebar to schedule sync.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(apps) { app in
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(app.name)
+                                    .fontWeight(.medium)
+                                if let error = app.lastSyncError, !error.isEmpty {
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                        .lineLimit(2)
+                                } else if let last = app.lastSyncedAt {
+                                    Text("Last synced \(last.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("Never synced")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            Spacer()
+                            Picker("Cadence", selection: cadenceBinding(for: app)) {
+                                ForEach(SyncCadence.allCases) { cadence in
+                                    Text(cadence.label).tag(cadence)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 110)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+
+            HStack {
+                Button("Run Due Now") {
+                    Task { await runDue() }
+                }
+                .disabled(isRunning || apps.allSatisfy { $0.syncCadence == .off })
+                if isRunning {
+                    ProgressView().controlSize(.small)
+                }
+                if let status {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+        }
+        .padding(20)
+    }
+
+    private func cadenceBinding(for app: AppRecord) -> Binding<SyncCadence> {
+        Binding(
+            get: { app.syncCadence },
+            set: { app.syncCadence = $0 }
+        )
+    }
+
+    private func runDue() async {
+        isRunning = true
+        defer { isRunning = false }
+        await SyncScheduler.shared.runDueApps()
+        status = "Checked \(apps.filter { $0.syncCadence != .off }.count) scheduled app(s)."
     }
 }
 

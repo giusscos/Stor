@@ -9,6 +9,8 @@ final class TrackedKeyword {
     var addedAt: Date
     var popularityScore: Int?
     var popularityLastUpdated: Date?
+    /// 0–100 competition from the last SERP check. Nil until rankings have been checked.
+    var difficultyScore: Int?
     var app: AppRecord?
 
     @Relationship(deleteRule: .cascade)

@@ -15,6 +15,8 @@ struct ListingTabView: View {
     @State private var importSucceeded = false
     @State private var showPushConfirmation = false
     @State private var pushResult: String?
+    @State private var versions: [ASCAppStoreVersion] = []
+    @State private var isLoadingVersions = false
 
     var sortedSnapshots: [MetadataSnapshot] {
         app.snapshots.sorted { $0.capturedAt > $1.capturedAt }
@@ -28,6 +30,8 @@ struct ListingTabView: View {
         }
         .toolbar {
             ToolbarItemGroup {
+                versionPicker
+
                 if sortedSnapshots.count >= 2 {
                     Button { showDiff = true } label: {
                         Label("Compare", systemImage: "plusminus.circle")
@@ -124,6 +128,7 @@ struct ListingTabView: View {
             if selectedSnapshot == nil {
                 selectedSnapshot = sortedSnapshots.first
             }
+            Task { await loadVersions() }
         }
     }
 
@@ -189,7 +194,8 @@ struct ListingTabView: View {
             if let snapshot = selectedSnapshot {
                 MetadataDetailView(
                     snapshot: snapshot,
-                    isEditable: snapshot == sortedSnapshots.first
+                    app: app,
+                    isEditable: snapshot == sortedSnapshots.first && snapshot.isVersionEditable
                 )
             } else {
                 VStack(spacing: 10) {
@@ -207,6 +213,65 @@ struct ListingTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.horizontal, 32)
             }
+        }
+    }
+
+    // MARK: - Version picker
+
+    @ViewBuilder
+    private var versionPicker: some View {
+        Menu {
+            if versions.isEmpty {
+                Text("Sync or wait — no versions loaded")
+            } else {
+                ForEach(versions, id: \.id) { version in
+                    Button {
+                        app.preferredVersionId = version.id
+                    } label: {
+                        if version.id == app.preferredVersionId {
+                            Label(versionLabel(version), systemImage: "checkmark")
+                        } else {
+                            Text(versionLabel(version))
+                        }
+                    }
+                }
+            }
+        } label: {
+            if isLoadingVersions {
+                ProgressView().controlSize(.small)
+            } else if let selected = selectedVersion {
+                Label(versionLabel(selected), systemImage: "app.badge")
+            } else {
+                Label("Version", systemImage: "app.badge")
+            }
+        }
+        .help("Choose which App Store version Sync pulls and Push writes")
+        .disabled(isSyncing || isPushing)
+    }
+
+    private var selectedVersion: ASCAppStoreVersion? {
+        if let id = app.preferredVersionId {
+            return versions.first { $0.id == id }
+        }
+        return versions.first
+    }
+
+    private func versionLabel(_ version: ASCAppStoreVersion) -> String {
+        "\(version.attributes.versionString) · \(version.displayState)"
+    }
+
+    private func loadVersions() async {
+        guard let credentials = try? KeychainService.shared.load() else { return }
+        isLoadingVersions = true
+        defer { isLoadingVersions = false }
+        do {
+            let fetched = try await ASCAPIClient(credentials: credentials).fetchVersions(appId: app.ascAppId)
+            versions = fetched
+            if app.preferredVersionId == nil {
+                app.preferredVersionId = fetched.first?.id
+            }
+        } catch {
+            // Picker stays empty; Sync still works against the latest editable version.
         }
     }
 
@@ -375,56 +440,14 @@ struct ListingTabView: View {
         Task {
             defer { isSyncing = false }
             do {
-                let client = ASCAPIClient(credentials: credentials)
-                let result = try await client.syncMetadata(appId: app.ascAppId)
-
-                let snapshot = MetadataSnapshot(
-                    capturedAt: .now,
-                    versionString: result.version?.attributes.versionString,
-                    versionId: result.version?.id
+                let snapshot = try await MetadataSyncService.sync(
+                    app: app,
+                    versionId: app.preferredVersionId,
+                    credentials: credentials,
+                    context: modelContext
                 )
-                snapshot.app = app
-                modelContext.insert(snapshot)
-
-                var localeMap: [String: LocalizedMetadata] = [:]
-
-                for vLoc in result.versionLocalizations {
-                    let meta = LocalizedMetadata(
-                        locale: vLoc.attributes.locale,
-                        appDescription: vLoc.attributes.description,
-                        keywords: vLoc.attributes.keywords,
-                        promotionalText: vLoc.attributes.promotionalText,
-                        whatsNew: vLoc.attributes.whatsNew
-                    )
-                    meta.versionLocalizationId = vLoc.id
-                    localeMap[vLoc.attributes.locale] = meta
-                }
-
-                for infoLoc in result.appInfoLocalizations {
-                    if let existing = localeMap[infoLoc.attributes.locale] {
-                        existing.appName = infoLoc.attributes.name
-                        existing.subtitle = infoLoc.attributes.subtitle
-                        existing.appInfoLocalizationId = infoLoc.id
-                    } else {
-                        let meta = LocalizedMetadata(
-                            locale: infoLoc.attributes.locale,
-                            appName: infoLoc.attributes.name,
-                            subtitle: infoLoc.attributes.subtitle
-                        )
-                        meta.appInfoLocalizationId = infoLoc.id
-                        localeMap[infoLoc.attributes.locale] = meta
-                    }
-                }
-
-                for meta in localeMap.values {
-                    meta.snapshot = snapshot
-                    snapshot.localizations.append(meta)
-                    modelContext.insert(meta)
-                }
-
-                app.snapshots.append(snapshot)
                 selectedSnapshot = snapshot
-
+                await loadVersions()
             } catch {
                 syncError = error.localizedDescription
             }
@@ -474,6 +497,14 @@ private struct SnapshotTimelineRow: View {
                             .font(.caption.weight(.medium))
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                    }
+                    if let state = snapshot.versionState {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Text(ASCAppStoreVersion.displayName(for: state))
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(snapshot.isVersionEditable ? Color.green : Color.secondary)
                     }
                 }
             }

@@ -280,12 +280,41 @@ private struct AppSidebarRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(app.name)
                     .fontWeight(.medium)
-                Text(app.bundleId)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(app.bundleId)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    if let error = app.lastSyncError, !error.isEmpty {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .help(error)
+                    } else if let last = app.lastSyncedAt {
+                        Text(last, style: .relative)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .help("Last synced \(last.formatted(date: .abbreviated, time: .shortened))")
+                    }
+                }
             }
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            Menu("Auto-Sync") {
+                ForEach(SyncCadence.allCases) { cadence in
+                    Button {
+                        app.syncCadence = cadence
+                    } label: {
+                        if app.syncCadence == cadence {
+                            Label(cadence.label, systemImage: "checkmark")
+                        } else {
+                            Text(cadence.label)
+                        }
+                    }
+                }
+            }
+        }
         .task(id: app.bundleId) {
             guard app.iconURL == nil else { return }
             app.iconURL = await ITunesLookupClient.shared.fetchIconURL(bundleId: app.bundleId)

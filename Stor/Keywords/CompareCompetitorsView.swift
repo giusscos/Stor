@@ -10,6 +10,7 @@ struct CompareCompetitorsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var isChecking = false
+    @State private var showScan = false
     @State private var errorMessage: String?
     @State private var statusMessage: String?
 
@@ -65,6 +66,14 @@ struct CompareCompetitorsView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
+                        showScan = true
+                    } label: {
+                        Label("Scan Keywords", systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .disabled(competitors.isEmpty)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
                         checkCompetitorRankings()
                     } label: {
                         if isChecking {
@@ -75,6 +84,9 @@ struct CompareCompetitorsView: View {
                     }
                     .disabled(isChecking || competitors.isEmpty || keywords.isEmpty)
                 }
+            }
+            .sheet(isPresented: $showScan) {
+                CompetitorScanView(app: app, country: country)
             }
             .alert("Error", isPresented: Binding(
                 get: { errorMessage != nil },
@@ -149,6 +161,9 @@ struct CompareCompetitorsView: View {
                     }
                     Text("Popularity")
                         .frame(width: 90, alignment: .leading)
+                    Text("Opp")
+                        .frame(width: 44, alignment: .leading)
+                        .help("Opportunity")
                     Text("Shared")
                         .frame(width: 64, alignment: .leading)
                 }
@@ -181,6 +196,9 @@ struct CompareCompetitorsView: View {
                             }
                         }
                         .frame(width: 90, alignment: .leading)
+
+                        ScoreBadge(value: keyword.opportunity)
+                            .frame(width: 44, alignment: .leading)
 
                         sharedBadge(for: keyword)
                             .frame(width: 64, alignment: .leading)

@@ -115,19 +115,19 @@ struct SuggestKeywordsView: View {
 
     private var emptyDescription: String {
         if !adsSessionActive && app.competitors.isEmpty {
-            return "Sign in to Apple Ads and/or save competitors, then refresh."
+            return "Sync listing metadata, save competitors, or sign in to Apple Ads, then refresh."
         }
         if !adsSessionActive {
-            return "No competitor terms found. Sign in to Apple Ads for related keyword suggestions."
+            return "No related terms found. Sign in to Apple Ads to expand from your best seeds."
         }
-        return "No new terms found. Try more tracked keywords or save competitors."
+        return "No new terms found. Try more specific tracked keywords or save competitors."
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Suggestions for \(Locale.current.localizedString(forRegionCode: country) ?? country)")
                 .font(.subheadline)
-            Text("From Apple Ads recommendations and competitor listing metadata.")
+            Text("Ranked by fit with your listing, then popularity. From your metadata, related App Store titles, Apple Ads, and competitors.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let statusMessage {
@@ -153,16 +153,13 @@ struct SuggestKeywordsView: View {
                     }
                     Spacer()
                     if let score = suggestion.popularity {
-                        Text("\(score)")
-                            .font(.caption)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 36, alignment: .trailing)
-                            .help("Popularity")
+                        ScoreBadge(value: KeywordScorer.opportunity(
+                            popularity: score,
+                            difficulty: 0,
+                            rank: nil
+                        ))
                     } else {
-                        Text("—")
-                            .foregroundStyle(.tertiary)
-                            .frame(width: 36, alignment: .trailing)
+                        ScoreBadge(value: nil)
                     }
                     Button("Add") {
                         addSuggestion(suggestion)
@@ -189,6 +186,19 @@ struct SuggestKeywordsView: View {
         let sessionOK = session.map { !$0.isEmpty } ?? false
         adsSessionActive = sessionOK
 
+        let context = await listingContext()
+        let seeds = KeywordSuggestionEngine.expansionSeeds(from: context)
+
+        mergeListingTerms(from: context, into: &collected)
+
+        do {
+            try await harvestRelatedAppTitles(seeds: seeds, into: &collected)
+        } catch is CancellationError {
+            return
+        } catch {
+            softError = softError ?? error.localizedDescription
+        }
+
         var adamId: Int64?
         if sessionOK {
             do {
@@ -204,42 +214,35 @@ struct SuggestKeywordsView: View {
             }
         }
 
-        // Apple Ads recommendations from tracked seeds
         if sessionOK, let adamId {
-            let seeds = app.trackedKeywords
-                .filter { $0.country.caseInsensitiveCompare(country) == .orderedSame }
-                .prefix(8)
             for seed in seeds {
                 do {
+                    try Task.checkCancellation()
                     let rows = try await SearchAdsAPIClient.shared.fetchRecommendations(
-                        seed: seed.term,
+                        seed: seed,
                         country: country,
                         adamId: adamId,
-                        limit: 25
+                        limit: 15
                     )
                     for row in rows {
-                        let key = row.text.lowercased()
-                        guard !trackedKeys.contains(key) else { continue }
-                        if var existing = collected[key] {
-                            if existing.popularity == nil { existing.popularity = row.score }
-                            collected[key] = existing
-                        } else {
-                            collected[key] = KeywordSuggestion(
-                                term: row.text,
-                                source: "Apple Ads · from “\(seed.term)”",
-                                popularity: row.score
-                            )
-                        }
+                        merge(
+                            term: row.text,
+                            source: "Apple Ads · from “\(seed)”",
+                            popularity: row.score,
+                            into: &collected
+                        )
                     }
+                } catch is CancellationError {
+                    return
                 } catch {
                     softError = softError ?? error.localizedDescription
                 }
             }
         }
 
-        // Competitor listing / metadata tokens
         for competitor in app.competitors {
             do {
+                try Task.checkCancellation()
                 var lookup = try await ITunesLookupClient.shared.lookup(bundleId: competitor.bundleId)
                 if lookup == nil {
                     lookup = try await ITunesLookupClient.shared.lookup(trackId: competitor.trackId)
@@ -247,22 +250,20 @@ struct SuggestKeywordsView: View {
                 guard let lookup else { continue }
                 let terms = ITunesLookupClient.shared.suggestionTerms(from: lookup)
                 for term in terms.prefix(30) {
-                    let key = term.lowercased()
-                    guard !trackedKeys.contains(key) else { continue }
-                    if collected[key] == nil {
-                        collected[key] = KeywordSuggestion(
-                            term: term,
-                            source: "Competitor · \(competitor.name)",
-                            popularity: nil
-                        )
-                    }
+                    merge(
+                        term: term,
+                        source: "Competitor · \(competitor.name)",
+                        popularity: nil,
+                        into: &collected
+                    )
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 softError = softError ?? error.localizedDescription
             }
         }
 
-        // Fill missing popularity when Ads web session is available
         if sessionOK, let adamId {
             let missing = collected.values
                 .filter { $0.popularity == nil }
@@ -284,20 +285,117 @@ struct SuggestKeywordsView: View {
             }
         }
 
-        suggestions = collected.values.sorted { lhs, rhs in
-            let lp = lhs.popularity ?? -1
-            let rp = rhs.popularity ?? -1
-            if lp != rp { return lp > rp }
-            return lhs.term.localizedCaseInsensitiveCompare(rhs.term) == .orderedAscending
+        let ranked = KeywordSuggestionEngine.rank(
+            collected.values.map {
+                KeywordSuggestionEngine.Candidate(term: $0.term, source: $0.source, popularity: $0.popularity)
+            },
+            context: context
+        )
+        suggestions = ranked.map {
+            KeywordSuggestion(term: $0.term, source: $0.source, popularity: $0.popularity)
         }
         statusMessage = suggestions.isEmpty
             ? nil
             : "\(suggestions.count) suggestion\(suggestions.count == 1 ? "" : "s")"
-        // Non-blocking notice — competitor rows may still have succeeded.
         if let softError, !suggestions.isEmpty {
             statusMessage = (statusMessage ?? "") + " · Ads: \(softError.prefix(80))"
         } else if let softError, suggestions.isEmpty {
             errorMessage = softError
+        }
+    }
+
+    private func listingContext() async -> KeywordSuggestionEngine.ListingContext {
+        let localization = app.listingLocalization(matchingCountry: country)
+        var name = localization?.appName ?? app.name
+        var subtitle = localization?.subtitle
+        var keywords = KeywordBudget.parse(localization?.keywords ?? "")
+        var description = localization?.appDescription
+
+        if localization == nil, let lookup = try? await ITunesLookupClient.shared.lookup(bundleId: app.bundleId) {
+            name = lookup.name
+            subtitle = lookup.subtitle ?? subtitle
+            if keywords.isEmpty, let raw = lookup.keywords {
+                keywords = KeywordBudget.parse(raw)
+            }
+            description = lookup.description ?? description
+        }
+
+        let tracked = app.trackedKeywords
+            .filter { $0.country.caseInsensitiveCompare(country) == .orderedSame }
+            .map {
+                KeywordSuggestionEngine.TrackedSeed(
+                    term: $0.term,
+                    popularity: $0.popularityScore,
+                    rank: $0.rankPoints.last?.position
+                )
+            }
+
+        return KeywordSuggestionEngine.ListingContext(
+            appName: name,
+            subtitle: subtitle,
+            keywords: keywords,
+            description: description,
+            tracked: tracked
+        )
+    }
+
+    private func mergeListingTerms(
+        from context: KeywordSuggestionEngine.ListingContext,
+        into collected: inout [String: KeywordSuggestion]
+    ) {
+        for term in context.keywords {
+            merge(term: term, source: "Your listing", popularity: nil, into: &collected)
+        }
+        for term in KeywordSuggestionEngine.terms(fromAppName: context.appName, subtitle: context.subtitle) {
+            guard !KeywordSuggestionEngine.isLikelyBrandToken(term, context: context) else { continue }
+            merge(term: term, source: "Your listing", popularity: nil, into: &collected)
+        }
+    }
+
+    private func harvestRelatedAppTitles(
+        seeds: [String],
+        into collected: inout [String: KeywordSuggestion]
+    ) async throws {
+        let serpSeeds = Array(seeds.prefix(KeywordSuggestionEngine.maxSERPSeeds))
+        for (index, seed) in serpSeeds.enumerated() {
+            try Task.checkCancellation()
+            if index > 0 {
+                try await Task.sleep(nanoseconds: RankingChecker.batchDelayNanoseconds)
+            }
+            let results = try await RankingChecker.shared.search(
+                keyword: seed,
+                country: country,
+                limit: KeywordSuggestionEngine.maxSERPAppsPerSeed
+            )
+            for result in results {
+                let terms = KeywordSuggestionEngine.terms(fromAppName: result.name, subtitle: result.subtitle)
+                for term in terms {
+                    merge(
+                        term: term,
+                        source: "Apps ranking for “\(seed)”",
+                        popularity: nil,
+                        into: &collected
+                    )
+                }
+            }
+        }
+    }
+
+    private func merge(
+        term: String,
+        source: String,
+        popularity: Int?,
+        into collected: inout [String: KeywordSuggestion]
+    ) {
+        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = trimmed.lowercased()
+        guard !key.isEmpty, !trackedKeys.contains(key) else { return }
+        if key == app.name.lowercased() { return }
+        if var existing = collected[key] {
+            if existing.popularity == nil { existing.popularity = popularity }
+            collected[key] = existing
+        } else {
+            collected[key] = KeywordSuggestion(term: trimmed, source: source, popularity: popularity)
         }
     }
 

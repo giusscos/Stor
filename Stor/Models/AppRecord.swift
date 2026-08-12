@@ -11,6 +11,13 @@ final class AppRecord {
     var iconURL: String?
     /// App Store adamId (iTunes `trackId`), cached for Apple Ads popularity calls.
     var adamId: Int64?
+    /// ASC version to sync against. Nil means “latest editable”.
+    var preferredVersionId: String?
+    /// `off` / `daily` / `weekly`. Nil is off.
+    var syncCadenceRaw: String?
+    var lastSyncedAt: Date?
+    var lastASORefreshAt: Date?
+    var lastSyncError: String?
 
     @Relationship(deleteRule: .cascade)
     var snapshots: [MetadataSnapshot] = []

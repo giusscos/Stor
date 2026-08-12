@@ -12,6 +12,8 @@ struct KeywordsTabView: View {
     @State private var showCompare          = false
     @State private var showSuggest          = false
     @State private var showImportLanguages  = false
+    @State private var showBudget           = false
+    @State private var showCompetitorScan   = false
     @State private var selectedCountry      = "US"
     @State private var searchText           = ""
     @State private var isRefreshing         = false
@@ -70,6 +72,11 @@ struct KeywordsTabView: View {
         !listingKeywordSources.isEmpty
     }
 
+    /// Draft localization whose storefront matches the selected country, for the budget helper.
+    private var budgetLocalization: LocalizedMetadata? {
+        app.listingLocalization(matchingCountry: selectedCountry)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if adsWebSession == nil {
@@ -122,6 +129,16 @@ struct KeywordsTabView: View {
             ImportLanguagesSheet(sources: listingKeywordSources) { selected in
                 importSelectedSources(selected)
             }
+        }
+        .sheet(isPresented: $showBudget) {
+            if let localization = budgetLocalization {
+                KeywordBudgetSheet(app: app, localization: localization) { packed in
+                    localization.keywords = packed
+                }
+            }
+        }
+        .sheet(isPresented: $showCompetitorScan) {
+            CompetitorScanView(app: app, country: selectedCountry)
         }
         .alert("Error", isPresented: Binding(
             get: { asyncError != nil },
@@ -227,7 +244,21 @@ struct KeywordsTabView: View {
                         Label("Suggest", systemImage: "lightbulb")
                     }
                     .buttonStyle(.bordered)
-                    .help("Suggest keywords from Search Ads and competitor listings")
+                    .help("Suggest keywords from your listing, related App Store titles, Search Ads, and competitors")
+
+                    Button { showCompetitorScan = true } label: {
+                        Label("Scan Competitors", systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(app.competitors.isEmpty)
+                    .help("Find keywords a saved competitor ranks for")
+
+                    Button { showBudget = true } label: {
+                        Label("Listing Budget", systemImage: "textformat.abc")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(budgetLocalization == nil || filteredKeywords.isEmpty)
+                    .help("Pack tracked keywords into the 100-character listing field")
 
                     if adsWebSession != nil {
                         Button(action: refreshPopularity) {
@@ -275,8 +306,11 @@ struct KeywordsTabView: View {
                 HStack(spacing: 0) {
                     Text("Keyword").frame(maxWidth: .infinity, alignment: .leading)
                     Text("Popularity").frame(width: 130, alignment: .leading)
-                    Text("Updated").frame(width: 88, alignment: .leading)
-                    Text("Rank").frame(width: 70, alignment: .leading)
+                    Text("Diff").frame(width: 40, alignment: .leading)
+                        .help("Difficulty 0–100 from SERP competition")
+                    Text("Opp").frame(width: 40, alignment: .leading)
+                        .help("Opportunity 0–100 from popularity, difficulty, and rank")
+                    Text("Rank").frame(width: 56, alignment: .leading)
                     Text("Trend").frame(width: 80, alignment: .leading)
                     Color.clear.frame(width: 36)
                 }
@@ -441,20 +475,11 @@ struct KeywordsTabView: View {
         Task {
             defer { isCheckingRankings = false }
             do {
-                for (index, keyword) in filteredKeywords.enumerated() {
-                    if index > 0 {
-                        try await Task.sleep(nanoseconds: RankingChecker.batchDelayNanoseconds)
-                    }
-                    let position = try await RankingChecker.shared.checkRanking(
-                        bundleId: app.bundleId,
-                        keyword: keyword.term,
-                        country: keyword.country
-                    )
-                    let ranking = KeywordRanking(checkedAt: .now, position: position, country: keyword.country)
-                    ranking.keyword = keyword
-                    keyword.rankingHistory.append(ranking)
-                    modelContext.insert(ranking)
-                }
+                try await ASORefreshService.checkRankings(
+                    bundleId: app.bundleId,
+                    keywords: filteredKeywords,
+                    context: modelContext
+                )
             } catch {
                 asyncError = error.localizedDescription
             }
@@ -583,19 +608,6 @@ private struct KeywordRow: View {
     /// rather than re-sorting the history for each.
     private var points: [RankPoint] { keyword.rankPoints }
 
-    /// Compact relative time for the Updated column (`Just now`, `12m`, `3h`, `2d`).
-    private static func compactRelative(from date: Date, now: Date = .now) -> String {
-        let seconds = max(0, Int(now.timeIntervalSince(date)))
-        if seconds < 60 { return "Just now" }
-        let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes)m ago" }
-        let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ago" }
-        let days = hours / 24
-        if days < 14 { return "\(days)d ago" }
-        return date.formatted(date: .abbreviated, time: .omitted)
-    }
-
     var body: some View {
         HStack(spacing: 0) {
             Text(keyword.term)
@@ -610,6 +622,9 @@ private struct KeywordRow: View {
                 } else if let score = keyword.popularityScore {
                     PopularityBar(score: score)
                         .frame(width: 130, alignment: .leading)
+                        .help(keyword.popularityLastUpdated.map {
+                            "Updated \($0.formatted(date: .abbreviated, time: .shortened))"
+                        } ?? "Popularity \(score)")
                 } else {
                     Text("—")
                         .font(.body)
@@ -618,46 +633,35 @@ private struct KeywordRow: View {
                 }
             }
 
-            Group {
-                if let updated = keyword.popularityLastUpdated {
-                    Text(Self.compactRelative(from: updated))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .frame(width: 88, alignment: .leading)
-                        .help(updated.formatted(date: .abbreviated, time: .shortened))
-                } else {
-                    Text("Never")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .frame(width: 88, alignment: .leading)
-                }
-            }
+            ScoreBadge(value: keyword.difficultyScore, inverted: true)
+                .frame(width: 40, alignment: .leading)
+
+            ScoreBadge(value: keyword.opportunity)
+                .frame(width: 40, alignment: .leading)
 
             Group {
                 let latest = points.last
                 if isCheckingRankings && latest == nil {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 70, height: 14, alignment: .leading)
+                        .frame(width: 56, height: 14, alignment: .leading)
                 } else if let pos = latest?.position {
                     Text("#\(pos)")
                         .font(.body)
                         .fontWeight(.medium)
                         .monospacedDigit()
                         .foregroundStyle(pos <= 10 ? .green : .primary)
-                        .frame(width: 70, alignment: .leading)
+                        .frame(width: 56, alignment: .leading)
                 } else if latest != nil {
                     Text(">200")
                         .font(.body)
                         .foregroundStyle(.tertiary)
-                        .frame(width: 70, alignment: .leading)
+                        .frame(width: 56, alignment: .leading)
                 } else {
                     Text("—")
                         .font(.body)
                         .foregroundStyle(.tertiary)
-                        .frame(width: 70, alignment: .leading)
+                        .frame(width: 56, alignment: .leading)
                 }
             }
 

@@ -149,6 +149,13 @@ struct DiscoverKeywordView: View {
                                     .padding(.vertical, 2)
                                     .background(.blue.opacity(0.15), in: Capsule())
                                     .foregroundStyle(.blue)
+                            } else if savedBundleIds.contains(result.bundleId) {
+                                Text("Competitor")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(.orange.opacity(0.15), in: Capsule())
+                                    .foregroundStyle(.orange)
                             }
                         }
                         if let subtitle = result.subtitle, !subtitle.isEmpty {

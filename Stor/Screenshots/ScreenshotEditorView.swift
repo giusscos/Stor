@@ -16,6 +16,7 @@ struct ScreenshotEditorView: View {
     @State private var importSucceeded = false
     @State private var renamingTemplateId: PersistentIdentifier?
     @State private var showBatchExport = false
+    @State private var showASCSets = false
     @State private var templatePendingDeletion: ScreenshotTemplate?
 
     private enum ScreenshotsViewMode: String, CaseIterable {
@@ -112,6 +113,13 @@ struct ScreenshotEditorView: View {
             }
 
             ToolbarItem {
+                Button { showASCSets = true } label: {
+                    Label("ASC Screenshots", systemImage: "photo.on.rectangle.angled")
+                }
+                .help("Preview, reorder, and delete screenshots already on App Store Connect")
+            }
+
+            ToolbarItem {
                 Button { showNewTemplate = true } label: {
                     Label("New Template", systemImage: "plus")
                 }
@@ -169,6 +177,9 @@ struct ScreenshotEditorView: View {
         }
         .sheet(isPresented: $showBatchExport) {
             BatchExportSheet(app: app, templates: templates, locales: availableLocales)
+        }
+        .sheet(isPresented: $showASCSets) {
+            ASCScreenshotSetsView(app: app)
         }
         .confirmationDialog(
             "Delete “\(templatePendingDeletion?.name ?? "")”?",

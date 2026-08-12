@@ -1,7 +1,9 @@
 import SwiftUI
+import SwiftData
 
 struct MetadataDetailView: View {
     let snapshot: MetadataSnapshot
+    var app: AppRecord?
     let isEditable: Bool
 
     @State private var selectedLocale: String?
@@ -42,6 +44,15 @@ struct MetadataDetailView: View {
                             .background(.quaternary, in: Capsule())
                     }
 
+                    if let state = snapshot.versionState {
+                        Text(ASCAppStoreVersion.displayName(for: state))
+                            .font(.caption)
+                            .foregroundStyle(snapshot.isVersionEditable ? .green : .secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(.quaternary, in: Capsule())
+                    }
+
                     Text(snapshot.capturedAt, style: .date)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -54,7 +65,7 @@ struct MetadataDetailView: View {
 
             if let loc = selectedLocalization {
                 ScrollView {
-                    LocalizationDetailView(localization: loc, isEditable: isEditable)
+                    LocalizationDetailView(localization: loc, app: app, isEditable: isEditable)
                         .padding(20)
                 }
             } else {

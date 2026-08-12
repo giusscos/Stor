@@ -3,11 +3,10 @@ import SwiftData
 
 @main
 struct StorApp: App {
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
-        .modelContainer(for: [
+    private let container: ModelContainer
+
+    init() {
+        let schema = Schema([
             AppRecord.self,
             MetadataSnapshot.self,
             LocalizedMetadata.self,
@@ -17,6 +16,19 @@ struct StorApp: App {
             CompetitorKeywordRanking.self,
             ScreenshotTemplate.self
         ])
+        do {
+            container = try ModelContainer(for: schema)
+        } catch {
+            fatalError("Could not create ModelContainer: \(error)")
+        }
+        SyncScheduler.shared.start(container: container)
+    }
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+        .modelContainer(container)
         .defaultSize(width: 1200, height: 750)
         .commands {
             // Disable File > New since we manage apps via the sidebar
@@ -26,16 +38,7 @@ struct StorApp: App {
 
         Settings {
             SettingsView()
-                .modelContainer(for: [
-                    AppRecord.self,
-                    MetadataSnapshot.self,
-                    LocalizedMetadata.self,
-                    TrackedKeyword.self,
-                    KeywordRanking.self,
-                    CompetitorApp.self,
-                    CompetitorKeywordRanking.self,
-                    ScreenshotTemplate.self
-                ])
+                .modelContainer(container)
         }
     }
 }

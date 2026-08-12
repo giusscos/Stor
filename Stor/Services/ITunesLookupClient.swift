@@ -41,21 +41,15 @@ final class ITunesLookupClient {
         (try? await lookup(bundleId: bundleId))?.iconURL
     }
 
-    /// Tokenize listing keywords + simple title/subtitle/description words for suggestions.
+    /// Tokenize listing keywords + title/subtitle/description words for suggestions.
     func suggestionTerms(from lookup: ITunesAppLookup) -> [String] {
         var terms: [String] = []
         if let keywords = lookup.keywords {
-            terms.append(contentsOf: keywords
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty })
+            terms.append(contentsOf: KeywordBudget.parse(keywords))
         }
-        for raw in [lookup.name, lookup.subtitle].compactMap({ $0 }) {
-            terms.append(contentsOf: tokenize(raw))
-        }
-        // Light description harvest: first ~40 tokens, skip very short noise.
+        terms.append(contentsOf: KeywordSuggestionEngine.terms(fromAppName: lookup.name, subtitle: lookup.subtitle))
         if let description = lookup.description {
-            terms.append(contentsOf: tokenize(description).prefix(40))
+            terms.append(contentsOf: KeywordSuggestionEngine.tokens(in: description).prefix(40))
         }
         var seen = Set<String>()
         var unique: [String] = []
@@ -106,11 +100,4 @@ final class ITunesLookupClient {
         )
     }
 
-    private func tokenize(_ text: String) -> [String] {
-        text
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.count >= 3 }
-    }
 }

@@ -60,6 +60,24 @@ extension AppRecord.KeywordInsertResult {
     }
 }
 
+extension AppRecord {
+    var latestSnapshot: MetadataSnapshot? {
+        snapshots.max(by: { $0.capturedAt < $1.capturedAt })
+    }
+
+    /// Localization for `country`, falling back to the primary locale, then any snapshot row.
+    func listingLocalization(matchingCountry country: String) -> LocalizedMetadata? {
+        guard let snapshot = latestSnapshot else { return nil }
+        let matches = snapshot.localizations.filter {
+            countryCode(fromLocale: $0.locale)?.caseInsensitiveCompare(country) == .orderedSame
+        }
+        return matches.first(where: { $0.locale.caseInsensitiveCompare(primaryLocale) == .orderedSame })
+            ?? matches.first
+            ?? snapshot.localizations.first(where: { $0.locale.caseInsensitiveCompare(primaryLocale) == .orderedSame })
+            ?? snapshot.localizations.first
+    }
+}
+
 enum KeywordCountries {
     /// Storefronts offered by default in the country pickers. Tracked keywords can use
     /// any storefront; these are just the ones we surface without prior data.
