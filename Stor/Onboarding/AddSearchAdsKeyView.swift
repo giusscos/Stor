@@ -91,9 +91,9 @@ struct AddSearchAdsKeyView: View {
                 )
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("Unlock keyword popularity")
+                Text("API credentials (optional)")
                     .font(.title3.weight(.semibold))
-                Text("Paste your Apple Search Ads API credentials to fetch popularity scores (0–100) for tracked keywords.")
+                Text("Paste Apple Search Ads Campaign Management API credentials. Popularity scores use an Apple Ads web login instead (Settings → Search Ads).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

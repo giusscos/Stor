@@ -19,7 +19,8 @@ Stor/Stor/
 │   ├── KeychainService.swift      — Save/load/delete ASCCredentials and SearchAdsCredentials in Keychain
 │   ├── ASCJWTGenerator.swift      — ES256 JWT signing with CryptoKit P256; signs with .p8 private key
 │   ├── ASCAPIClient.swift         — Full ASC API client: fetch apps/versions/localizations, sync, PATCH, screenshot upload
-│   ├── SearchAdsAPIClient.swift   — OAuth2 token exchange + keyword popularity via Search Ads spotlight endpoint
+│   ├── SearchAdsAPIClient.swift   — OAuth2 Campaign API + facade for web-session popularity
+│   ├── AppleAdsWebClient.swift    — Apple Ads CM popularities / recommendations (session cookies)
 │   └── RankingChecker.swift       — Keyword ranking positions via iTunes Search API (unofficial, isolated module)
 │
 ├── Onboarding/
@@ -82,7 +83,7 @@ Stor/Stor/
 | Popularity bar (0–100) | ✅ |
 | Search Ads credentials setup | ✅ |
 | OAuth2 token exchange + 1h cache | ✅ |
-| Keyword popularity via Search Ads spotlight API | ✅ |
+| Keyword popularity via Apple Ads web session (CM) | ✅ |
 | Batch refresh popularity scores | ✅ |
 | Keyword ranking via iTunes Search API | ✅ |
 | Ranking history stored in SwiftData | ✅ |

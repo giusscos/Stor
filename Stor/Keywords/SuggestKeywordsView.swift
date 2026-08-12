@@ -11,7 +11,7 @@ struct KeywordSuggestion: Identifiable, Hashable {
 struct SuggestKeywordsView: View {
     @Bindable var app: AppRecord
     let country: String
-    let searchAdsCredentials: SearchAdsCredentials?
+    let hasAdsWebSession: Bool
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
@@ -20,6 +20,15 @@ struct SuggestKeywordsView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var statusMessage: String?
+    @State private var showAdsLogin = false
+    @State private var adsSessionActive: Bool
+
+    init(app: AppRecord, country: String, hasAdsWebSession: Bool) {
+        self.app = app
+        self.country = country
+        self.hasAdsWebSession = hasAdsWebSession
+        _adsSessionActive = State(initialValue: hasAdsWebSession)
+    }
 
     private var trackedKeys: Set<String> {
         Set(
@@ -53,6 +62,11 @@ struct SuggestKeywordsView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
+                        if !adsSessionActive {
+                            Button("Sign in to Apple Ads…") { showAdsLogin = true }
+                                .buttonStyle(.borderedProminent)
+                                .padding(.top, 8)
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(.horizontal, 24)
@@ -78,13 +92,19 @@ struct SuggestKeywordsView: View {
                     .disabled(isLoading)
                 }
             }
-            .alert("Error", isPresented: Binding(
+            .alert("Notice", isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
             )) {
                 Button("OK") { errorMessage = nil }
             } message: {
                 Text(errorMessage ?? "")
+            }
+            .sheet(isPresented: $showAdsLogin) {
+                AppleAdsLoginView { _ in
+                    adsSessionActive = true
+                    Task { await loadSuggestions() }
+                }
             }
             .task {
                 await loadSuggestions()
@@ -94,8 +114,11 @@ struct SuggestKeywordsView: View {
     }
 
     private var emptyDescription: String {
-        if app.competitors.isEmpty && searchAdsCredentials == nil {
-            return "Connect Search Ads and/or save competitors, then refresh."
+        if !adsSessionActive && app.competitors.isEmpty {
+            return "Sign in to Apple Ads and/or save competitors, then refresh."
+        }
+        if !adsSessionActive {
+            return "No competitor terms found. Sign in to Apple Ads for related keyword suggestions."
         }
         return "No new terms found. Try more tracked keywords or save competitors."
     }
@@ -104,7 +127,7 @@ struct SuggestKeywordsView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Suggestions for \(Locale.current.localizedString(forRegionCode: country) ?? country)")
                 .font(.subheadline)
-            Text("From Search Ads related terms and competitor listing metadata.")
+            Text("From Apple Ads recommendations and competitor listing metadata.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let statusMessage {
@@ -160,18 +183,39 @@ struct SuggestKeywordsView: View {
         defer { isLoading = false }
 
         var collected: [String: KeywordSuggestion] = [:]
+        var softError: String?
 
-        // Spotlight related terms from tracked seeds
-        if let credentials = searchAdsCredentials {
+        let session = try? KeychainService.shared.loadAppleAdsWebSession()
+        let sessionOK = session.map { !$0.isEmpty } ?? false
+        adsSessionActive = sessionOK
+
+        var adamId: Int64?
+        if sessionOK {
+            do {
+                if let cached = app.adamId {
+                    adamId = cached
+                } else {
+                    let resolved = try await AppleAdsWebClient.shared.resolveAdamId(bundleId: app.bundleId)
+                    adamId = resolved
+                    await MainActor.run { app.adamId = resolved }
+                }
+            } catch {
+                softError = error.localizedDescription
+            }
+        }
+
+        // Apple Ads recommendations from tracked seeds
+        if sessionOK, let adamId {
             let seeds = app.trackedKeywords
                 .filter { $0.country.caseInsensitiveCompare(country) == .orderedSame }
                 .prefix(8)
             for seed in seeds {
                 do {
-                    let rows = try await SearchAdsAPIClient.shared.fetchSpotlightSuggestions(
-                        query: seed.term,
+                    let rows = try await SearchAdsAPIClient.shared.fetchRecommendations(
+                        seed: seed.term,
                         country: country,
-                        credentials: credentials
+                        adamId: adamId,
+                        limit: 25
                     )
                     for row in rows {
                         let key = row.text.lowercased()
@@ -182,19 +226,19 @@ struct SuggestKeywordsView: View {
                         } else {
                             collected[key] = KeywordSuggestion(
                                 term: row.text,
-                                source: "Search Ads · from “\(seed.term)”",
+                                source: "Apple Ads · from “\(seed.term)”",
                                 popularity: row.score
                             )
                         }
                     }
                 } catch {
-                    errorMessage = error.localizedDescription
+                    softError = softError ?? error.localizedDescription
                 }
             }
         }
 
         // Competitor listing / metadata tokens
-            for competitor in app.competitors {
+        for competitor in app.competitors {
             do {
                 var lookup = try await ITunesLookupClient.shared.lookup(bundleId: competitor.bundleId)
                 if lookup == nil {
@@ -214,24 +258,28 @@ struct SuggestKeywordsView: View {
                     }
                 }
             } catch {
-                // Keep going; one competitor failure shouldn't block the rest
-                if errorMessage == nil {
-                    errorMessage = error.localizedDescription
-                }
+                softError = softError ?? error.localizedDescription
             }
         }
 
-        // Fill missing popularity when Search Ads is available
-        if let credentials = searchAdsCredentials {
-            for key in collected.keys.sorted() {
-                guard var item = collected[key], item.popularity == nil else { continue }
-                if let score = try? await SearchAdsAPIClient.shared.fetchPopularity(
-                    keyword: item.term,
-                    country: country,
-                    credentials: credentials
+        // Fill missing popularity when Ads web session is available
+        if sessionOK, let adamId {
+            let missing = collected.values
+                .filter { $0.popularity == nil }
+                .map(\.term)
+            if !missing.isEmpty {
+                if let scores = try? await AppleAdsWebClient.shared.fetchPopularities(
+                    keywords: missing,
+                    adamId: adamId,
+                    country: country
                 ) {
-                    item.popularity = score
-                    collected[key] = item
+                    for key in collected.keys {
+                        guard var item = collected[key], item.popularity == nil else { continue }
+                        if let score = scores[key] {
+                            item.popularity = score
+                            collected[key] = item
+                        }
+                    }
                 }
             }
         }
@@ -245,6 +293,12 @@ struct SuggestKeywordsView: View {
         statusMessage = suggestions.isEmpty
             ? nil
             : "\(suggestions.count) suggestion\(suggestions.count == 1 ? "" : "s")"
+        // Non-blocking notice — competitor rows may still have succeeded.
+        if let softError, !suggestions.isEmpty {
+            statusMessage = (statusMessage ?? "") + " · Ads: \(softError.prefix(80))"
+        } else if let softError, suggestions.isEmpty {
+            errorMessage = softError
+        }
     }
 
     private func addSuggestion(_ suggestion: KeywordSuggestion) {

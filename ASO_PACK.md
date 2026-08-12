@@ -7,12 +7,12 @@ This document describes the complete App Store Optimization feature set beyond *
 | Capability | Status |
 |---|---|
 | Track keywords per app/country | Shipped |
-| Popularity via Apple Search Ads spotlight | Shipped |
+| Popularity via Apple Ads web session (CM popularities) | Shipped |
 | Your app’s organic rank (iTunes Search top 200) | Shipped |
 | Discover: top SERP apps for a keyword | v1 |
 | Save competitors per app | v1 |
 | Side-by-side rank table (you vs competitors) | v1 |
-| Light suggestions (spotlight related + competitor listing keywords) | v1 |
+| Light suggestions (Ads recommendations + competitor listing keywords) | v1 |
 | Shared-keyword hint (both in top 200) | v1 |
 
 See Keywords tab: Discover, Compare, Suggest.
@@ -73,15 +73,22 @@ Also listed in `NEXT_STEPS.md` §4.
 
 ## 3. Reverse-SERP / “keywords they rank for”
 
-**Goal:** Approximate which terms a competitor ranks for without a third-party keyword DB.
+**Goal:** Approximate which terms a competitor (or your app) ranks for — Astro’s Suggest model.
 
-**Approach:**
+Astro fills Suggest from a **multi-user keyword inventory**: whenever anyone checks rankings, apps seen in the SERP are associated with that keyword centrally. Stor is local-first today, so matching that UX needs either:
+
+1. **Shared backend / sync** — store `(bundleId, country, keyword, position, checkedAt)` from all users’ ranking checks, then query “keywords for this adamId”.
+2. **Local crawl** — seed from competitor listing keywords + Ads recommendations, then run SERP checks and record whether the target app appears in top N (expensive, incomplete vs a crowd DB).
+
+**Near-term (local only):**
 1. Seed from competitor listing keywords + title/subtitle tokens (Lookup)
-2. Expand via Search Ads spotlight suggestions around those seeds
+2. Expand via Apple Ads CM recommendations around those seeds
 3. For each candidate, run SERP and record whether the competitor appears in top N
 4. Store results on `CompetitorKeywordRanking` (or a dedicated inventory table)
 
-**Limits:** Expensive (rate limits), incomplete vs Sensor Tower–class DBs. Batch with delays; prefer user-triggered “Scan competitor” over continuous crawl.
+**Limits:** Expensive (rate limits), incomplete vs Sensor Tower / Astro–class DBs. Batch with delays; prefer user-triggered “Scan competitor” over continuous crawl.
+
+**Future B:** optional cloud inventory so Suggest can show “keywords this app ranks for” the way Astro does, without each user crawling alone.
 
 ---
 

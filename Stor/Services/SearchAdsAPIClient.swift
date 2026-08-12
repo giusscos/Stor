@@ -21,7 +21,7 @@ enum SearchAdsError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noCredentials:        return "No Apple Search Ads credentials configured."
+        case .noCredentials:        return "No Apple Search Ads API credentials configured."
         case .tokenFailed(let m):   return "Token exchange failed: \(m)"
         case .httpError(let c, let m): return "Search Ads HTTP \(c): \(m.prefix(300))"
         }
@@ -30,6 +30,9 @@ enum SearchAdsError: LocalizedError {
 
 // MARK: - Client
 
+/// OAuth Campaign Management API client (`.p8` keys) plus a thin facade over
+/// [`AppleAdsWebClient`] for keyword popularity / recommendations, which require
+/// an Apple Ads **web session** (dashboard cookies), not OAuth alone.
 final class SearchAdsAPIClient {
     static let shared = SearchAdsAPIClient()
 
@@ -42,53 +45,36 @@ final class SearchAdsAPIClient {
     /// minted for one org keeps being sent after the user switches accounts.
     private var tokenOwner: String?
 
-    // MARK: Public
+    // MARK: Popularity / recommendations (web session)
 
     /// Returns a popularity score 0–100 for `keyword` in `country`, or nil if unknown.
+    /// Requires a saved Apple Ads web session (see `AppleAdsLoginView`).
     func fetchPopularity(
         keyword: String,
         country: String,
-        credentials: SearchAdsCredentials
+        adamId: Int64
     ) async throws -> Int? {
-        let suggestions = try await fetchSpotlightSuggestions(
-            query: keyword,
-            country: country,
-            credentials: credentials
+        let map = try await AppleAdsWebClient.shared.fetchPopularities(
+            keywords: [keyword],
+            adamId: adamId,
+            country: country
         )
-        let target = keyword.lowercased()
-        // No exact row means Apple has no score for this term. Returning nil keeps that
-        // distinct from a genuine zero so the keyword table can show "unknown".
-        return suggestions.first(where: { $0.text.lowercased() == target })?.score
+        return map[keyword.lowercased()]
     }
 
-    /// Spotlight suggestion rows (related terms + scores) for a query.
-    func fetchSpotlightSuggestions(
-        query: String,
+    /// Related keyword rows (text + optional popularity) for a seed query.
+    func fetchRecommendations(
+        seed: String,
         country: String,
-        credentials: SearchAdsCredentials
+        adamId: Int64,
+        limit: Int = 25
     ) async throws -> [SpotlightSuggestion] {
-        let token = try await accessToken(for: credentials)
-
-        var comps = URLComponents(string: "\(base)/search/keywords/spotlight")!
-        comps.queryItems = [
-            .init(name: "query",           value: query),
-            .init(name: "limit",           value: "20"),
-            .init(name: "countryOrRegion", value: country)
-        ]
-        guard let url = comps.url else { return [] }
-
-        var req = URLRequest(url: url)
-        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        if !credentials.orgId.isEmpty {
-            req.setValue("orgId=\(credentials.orgId)", forHTTPHeaderField: "X-AP-Context")
-        }
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw SearchAdsError.httpError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
-        }
-
-        return parseSuggestions(from: data)
+        try await AppleAdsWebClient.shared.fetchRecommendations(
+            seed: seed,
+            adamId: adamId,
+            country: country,
+            limit: limit
+        )
     }
 
     /// Refreshes popularity scores in-place, keeping going when individual terms fail so
@@ -96,22 +82,37 @@ final class SearchAdsAPIClient {
     @discardableResult
     func refreshPopularity(
         keywords: [TrackedKeyword],
-        credentials: SearchAdsCredentials
+        adamId: Int64
     ) async throws -> BatchOutcome {
         var outcome = BatchOutcome(total: keywords.count)
-        for kw in keywords {
+        guard !keywords.isEmpty else { return outcome }
+
+        // Batch by country to cut round-trips.
+        let byCountry = Dictionary(grouping: keywords, by: \.country)
+        for (country, group) in byCountry {
             do {
-                kw.popularityScore = try await fetchPopularity(
-                    keyword: kw.term,
-                    country: kw.country,
-                    credentials: credentials
+                let terms = group.map(\.term)
+                let scores = try await AppleAdsWebClient.shared.fetchPopularities(
+                    keywords: terms,
+                    adamId: adamId,
+                    country: country
                 )
-                kw.popularityLastUpdated = .now
-                outcome.succeeded += 1
+                for kw in group {
+                    if let score = scores[kw.term.lowercased()] {
+                        kw.popularityScore = score
+                        kw.popularityLastUpdated = .now
+                        outcome.succeeded += 1
+                    } else {
+                        // Apple often omits low-volume terms; treat as unknown, not failure.
+                        outcome.succeeded += 1
+                    }
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                outcome.failures.append(.init(term: kw.term, message: error.localizedDescription))
+                for kw in group {
+                    outcome.failures.append(.init(term: kw.term, message: error.localizedDescription))
+                }
             }
         }
         return outcome
@@ -142,7 +143,7 @@ final class SearchAdsAPIClient {
         }
     }
 
-    // MARK: - Token
+    // MARK: - OAuth helpers (Campaign Management API)
 
     /// Drops any cached token. Call after credentials change or are removed.
     func invalidateToken() {
@@ -150,6 +151,39 @@ final class SearchAdsAPIClient {
         tokenExpiry = nil
         tokenOwner = nil
     }
+
+    /// First adamId found on a campaign in the org (owned-app fallback).
+    func firstCampaignAdamId(credentials: SearchAdsCredentials) async throws -> Int64? {
+        let token = try await accessToken(for: credentials)
+        guard let url = URL(string: "\(base)/campaigns?limit=20") else { return nil }
+
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if !credentials.orgId.isEmpty {
+            req.setValue("orgId=\(credentials.orgId)", forHTTPHeaderField: "X-AP-Context")
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw SearchAdsError.httpError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = json["data"] as? [[String: Any]] else { return nil }
+
+        for item in items {
+            if let id = item["adamId"] as? Int64 { return id }
+            if let id = item["adamId"] as? Int { return Int64(id) }
+            if let id = item["adamId"] as? Double { return Int64(id) }
+            if let nested = item["adam"] as? [String: Any] {
+                if let id = nested["adamId"] as? Int64 { return id }
+                if let id = nested["adamId"] as? Int { return Int64(id) }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Token
 
     private func accessToken(for credentials: SearchAdsCredentials) async throws -> String {
         let owner = credentials.cacheIdentity
@@ -204,32 +238,9 @@ final class SearchAdsAPIClient {
         let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
         return data.base64URLEncoded()
     }
-
-    // MARK: - Suggestions parsing
-
-    private func parseSuggestions(from data: Data) -> [SpotlightSuggestion] {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let items = json["data"] as? [[String: Any]] else { return [] }
-
-        return items.compactMap { item in
-            guard let text = item["text"] as? String, !text.isEmpty else { return nil }
-            var score: Int?
-            for key in ["score", "popularity", "impressionShare"] {
-                if let v = item[key] as? Int {
-                    score = min(100, max(0, v))
-                    break
-                }
-                if let v = item[key] as? Double {
-                    score = min(100, max(0, Int(v * 100)))
-                    break
-                }
-            }
-            return SpotlightSuggestion(text: text, score: score)
-        }
-    }
 }
 
-/// A related keyword from Apple Search Ads spotlight.
+/// A related keyword from Apple Ads recommendations / popularity lookup.
 struct SpotlightSuggestion: Hashable {
     let text: String
     let score: Int?

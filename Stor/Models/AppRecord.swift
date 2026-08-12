@@ -9,6 +9,8 @@ final class AppRecord {
     var primaryLocale: String
     var addedAt: Date
     var iconURL: String?
+    /// App Store adamId (iTunes `trackId`), cached for Apple Ads popularity calls.
+    var adamId: Int64?
 
     @Relationship(deleteRule: .cascade)
     var snapshots: [MetadataSnapshot] = []

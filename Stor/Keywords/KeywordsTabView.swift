@@ -7,6 +7,7 @@ struct KeywordsTabView: View {
 
     @State private var showAddKeyword       = false
     @State private var showConnectAds       = false
+    @State private var showAdsLogin         = false
     @State private var showDiscover         = false
     @State private var showCompare          = false
     @State private var showSuggest          = false
@@ -18,6 +19,7 @@ struct KeywordsTabView: View {
     @State private var asyncError: String?
     @State private var importMessage: String?
     @State private var searchAdsCredentials: SearchAdsCredentials?
+    @State private var adsWebSession: AppleAdsWebSession?
     @State private var trendKeyword: TrackedKeyword?
     @State private var keywordPendingDeletion: TrackedKeyword?
 
@@ -70,7 +72,7 @@ struct KeywordsTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if searchAdsCredentials == nil {
+            if adsWebSession == nil {
                 searchAdsBanner
             }
             controlsBar
@@ -82,11 +84,16 @@ struct KeywordsTabView: View {
             }
         }
         .onAppear {
-            searchAdsCredentials = try? KeychainService.shared.loadSearchAds()
+            reloadAdsAuth()
         }
         .sheet(isPresented: $showAddKeyword) {
             AddKeywordView(app: app, defaultCountry: selectedCountry) { result in
                 if result.skipped > 0 { importMessage = result.summary() }
+            }
+        }
+        .sheet(isPresented: $showAdsLogin) {
+            AppleAdsLoginView { session in
+                adsWebSession = session
             }
         }
         .sheet(isPresented: $showConnectAds) {
@@ -108,7 +115,7 @@ struct KeywordsTabView: View {
             SuggestKeywordsView(
                 app: app,
                 country: selectedCountry,
-                searchAdsCredentials: searchAdsCredentials
+                hasAdsWebSession: adsWebSession != nil
             )
         }
         .sheet(isPresented: $showImportLanguages) {
@@ -140,12 +147,17 @@ struct KeywordsTabView: View {
         HStack(spacing: 12) {
             Image(systemName: "chart.bar.xaxis")
                 .foregroundStyle(.blue)
-            Text("Connect Apple Search Ads to fetch keyword popularity scores (0–100).")
+            Text("Sign in to Apple Ads to fetch keyword popularity scores (0–100).")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Spacer()
-            Button("Connect") { showConnectAds = true }
+            Button("Sign In") { showAdsLogin = true }
                 .buttonStyle(.borderedProminent)
+            if searchAdsCredentials == nil {
+                Button("API Key…") { showConnectAds = true }
+                    .buttonStyle(.bordered)
+                    .help("Optional Campaign Management API credentials")
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -217,7 +229,7 @@ struct KeywordsTabView: View {
                     .buttonStyle(.bordered)
                     .help("Suggest keywords from Search Ads and competitor listings")
 
-                    if searchAdsCredentials != nil {
+                    if adsWebSession != nil {
                         Button(action: refreshPopularity) {
                             Label {
                                 Text("Refresh Popularity")
@@ -232,7 +244,7 @@ struct KeywordsTabView: View {
                         }
                         .buttonStyle(.bordered)
                         .disabled(isRefreshing || filteredKeywords.isEmpty)
-                        .help("Fetch popularity scores from Apple Search Ads")
+                        .help("Fetch popularity scores from Apple Ads")
                     }
 
                     Button(action: checkRankings) {
@@ -262,8 +274,8 @@ struct KeywordsTabView: View {
             Section {
                 HStack(spacing: 0) {
                     Text("Keyword").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Popularity").frame(width: 110, alignment: .leading)
-                    Text("Updated").frame(width: 110, alignment: .leading)
+                    Text("Popularity").frame(width: 130, alignment: .leading)
+                    Text("Updated").frame(width: 88, alignment: .leading)
                     Text("Rank").frame(width: 70, alignment: .leading)
                     Text("Trend").frame(width: 80, alignment: .leading)
                     Color.clear.frame(width: 36)
@@ -387,9 +399,21 @@ struct KeywordsTabView: View {
             .filter { !$0.isEmpty }
     }
 
+    private func reloadAdsAuth() {
+        adsWebSession = try? KeychainService.shared.loadAppleAdsWebSession()
+        searchAdsCredentials = try? KeychainService.shared.loadSearchAds()
+    }
+
+    private func resolveAdamId() async throws -> Int64 {
+        if let cached = app.adamId { return cached }
+        let id = try await AppleAdsWebClient.shared.resolveAdamId(bundleId: app.bundleId)
+        await MainActor.run { app.adamId = id }
+        return id
+    }
+
     private func refreshPopularity() {
-        guard let credentials = searchAdsCredentials else {
-            showConnectAds = true
+        guard adsWebSession != nil else {
+            showAdsLogin = true
             return
         }
         isRefreshing = true
@@ -397,10 +421,14 @@ struct KeywordsTabView: View {
         Task {
             defer { isRefreshing = false }
             do {
-                try await SearchAdsAPIClient.shared.refreshPopularity(
+                let adamId = try await resolveAdamId()
+                let outcome = try await SearchAdsAPIClient.shared.refreshPopularity(
                     keywords: filteredKeywords,
-                    credentials: credentials
+                    adamId: adamId
                 )
+                if let summary = outcome.summary {
+                    asyncError = summary
+                }
             } catch {
                 asyncError = error.localizedDescription
             }
@@ -555,6 +583,19 @@ private struct KeywordRow: View {
     /// rather than re-sorting the history for each.
     private var points: [RankPoint] { keyword.rankPoints }
 
+    /// Compact relative time for the Updated column (`Just now`, `12m`, `3h`, `2d`).
+    private static func compactRelative(from date: Date, now: Date = .now) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 60 { return "Just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h ago" }
+        let days = hours / 24
+        if days < 14 { return "\(days)d ago" }
+        return date.formatted(date: .abbreviated, time: .omitted)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             Text(keyword.term)
@@ -565,28 +606,32 @@ private struct KeywordRow: View {
                 if isRefreshing && keyword.popularityScore == nil {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: 110, height: 14, alignment: .leading)
+                        .frame(width: 130, height: 14, alignment: .leading)
                 } else if let score = keyword.popularityScore {
-                    PopularityBar(score: score).frame(width: 110)
+                    PopularityBar(score: score)
+                        .frame(width: 130, alignment: .leading)
                 } else {
                     Text("—")
                         .font(.body)
                         .foregroundStyle(.tertiary)
-                        .frame(width: 110, alignment: .leading)
+                        .frame(width: 130, alignment: .leading)
                 }
             }
 
             Group {
                 if let updated = keyword.popularityLastUpdated {
-                    Text(updated, style: .relative)
-                        .font(.body)
+                    Text(Self.compactRelative(from: updated))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .frame(width: 110, alignment: .leading)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .frame(width: 88, alignment: .leading)
+                        .help(updated.formatted(date: .abbreviated, time: .shortened))
                 } else {
                     Text("Never")
-                        .font(.body)
+                        .font(.caption)
                         .foregroundStyle(.tertiary)
-                        .frame(width: 110, alignment: .leading)
+                        .frame(width: 88, alignment: .leading)
                 }
             }
 
@@ -656,22 +701,23 @@ private struct PopularityBar: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4).fill(.quinary)
                     RoundedRectangle(cornerRadius: 4)
                         .fill(barColor.gradient)
-                        .frame(width: geo.size.width * CGFloat(score) / 100)
+                        .frame(width: geo.size.width * CGFloat(min(100, max(0, score))) / 100)
                 }
             }
             .frame(height: 8)
 
             Text("\(score)")
-                .font(.caption)
-                .monospacedDigit()
+                .font(.caption.monospacedDigit().weight(.medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 24, alignment: .trailing)
+                .frame(width: 28, alignment: .trailing)
+                .help("Popularity \(score)")
         }
+        .padding(.trailing, 12)
     }
 }

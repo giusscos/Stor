@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The standard macOS Settings window. Credential management used to live only in
 /// onboarding and a sidebar menu, which meant there was no way to review or disconnect
-/// Apple Search Ads once it had been connected.
+/// Apple Ads once it had been connected.
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -16,7 +16,7 @@ struct SettingsView: View {
             StorageSettingsView()
                 .tabItem { Label("Storage", systemImage: "internaldrive") }
         }
-        .frame(width: 520, height: 380)
+        .frame(width: 560, height: 480)
     }
 }
 
@@ -168,14 +168,106 @@ private struct AccountRow: View {
 // MARK: - Apple Search Ads
 
 private struct SearchAdsSettingsView: View {
+    @State private var webSession: AppleAdsWebSession?
     @State private var credentials: SearchAdsCredentials?
-    @State private var showConnect = false
-    @State private var confirmDisconnect = false
+    @State private var showWebLogin = false
+    @State private var showConnectAPI = false
+    @State private var confirmDisconnectWeb = false
+    @State private var confirmDisconnectAPI = false
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Apple Search Ads supplies the popularity scores shown in the Keywords tab.")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Keyword popularity (0–100) comes from an Apple Ads dashboard session. API keys are optional and kept for Campaign Management features.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                webSessionSection
+                apiKeySection
+            }
+            .padding(20)
+        }
+        .onAppear(perform: reload)
+        .sheet(isPresented: $showWebLogin) {
+            AppleAdsLoginView { session in
+                webSession = session
+            }
+        }
+        .sheet(isPresented: $showConnectAPI) {
+            AddSearchAdsKeyView { saved in
+                credentials = saved
+            }
+        }
+        .confirmationDialog(
+            "Sign out of Apple Ads?",
+            isPresented: $confirmDisconnectWeb,
+            titleVisibility: .visible
+        ) {
+            Button("Sign Out", role: .destructive, action: disconnectWeb)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The saved dashboard session is removed. Popularity scores already fetched stay in place.")
+        }
+        .confirmationDialog(
+            "Remove API credentials?",
+            isPresented: $confirmDisconnectAPI,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive, action: disconnectAPI)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The private key is removed from your Keychain.")
+        }
+        .alert("Keychain Error", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    private var webSessionSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Apple Ads login")
+                .font(.headline)
+
+            if let webSession {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        labelled("Status", "Signed in")
+                        labelled(
+                            "Saved",
+                            webSession.savedAt.formatted(date: .abbreviated, time: .shortened)
+                        )
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+                }
+
+                HStack {
+                    Button("Refresh Session…") { showWebLogin = true }
+                    Button("Sign Out", role: .destructive) { confirmDisconnectWeb = true }
+                    Spacer()
+                }
+            } else {
+                Text("Required for popularity scores and Ads keyword suggestions.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Sign in to Apple Ads…") { showWebLogin = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private var apiKeySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("API credentials (optional)")
+                .font(.headline)
+
+            Text("OAuth `.p8` keys for the Campaign Management API. Not used for popularity.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -192,48 +284,14 @@ private struct SearchAdsSettingsView: View {
                 }
 
                 HStack {
-                    Button("Replace Credentials…") { showConnect = true }
-                    Button("Disconnect", role: .destructive) { confirmDisconnect = true }
+                    Button("Replace Credentials…") { showConnectAPI = true }
+                    Button("Remove", role: .destructive) { confirmDisconnectAPI = true }
                     Spacer()
                 }
             } else {
-                ContentUnavailableView {
-                    Label("Not connected", systemImage: "chart.bar")
-                } description: {
-                    Text("Connect Apple Search Ads to fetch keyword popularity.")
-                } actions: {
-                    Button("Connect…") { showConnect = true }
-                        .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Button("Add API Key…") { showConnectAPI = true }
+                    .buttonStyle(.bordered)
             }
-
-            Spacer(minLength: 0)
-        }
-        .padding(20)
-        .onAppear(perform: reload)
-        .sheet(isPresented: $showConnect) {
-            AddSearchAdsKeyView { saved in
-                credentials = saved
-            }
-        }
-        .confirmationDialog(
-            "Disconnect Apple Search Ads?",
-            isPresented: $confirmDisconnect,
-            titleVisibility: .visible
-        ) {
-            Button("Disconnect", role: .destructive, action: disconnect)
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The private key is removed from your Keychain. Popularity scores already fetched stay in place.")
-        }
-        .alert("Keychain Error", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
         }
     }
 
@@ -251,13 +309,24 @@ private struct SearchAdsSettingsView: View {
 
     private func reload() {
         do {
+            webSession = try KeychainService.shared.loadAppleAdsWebSession()
             credentials = try KeychainService.shared.loadSearchAds()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func disconnect() {
+    private func disconnectWeb() {
+        do {
+            try KeychainService.shared.deleteAppleAdsWebSession()
+            AppleAdsWebClient.shared.clearCaches()
+            webSession = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func disconnectAPI() {
         do {
             try KeychainService.shared.deleteSearchAds()
             credentials = nil

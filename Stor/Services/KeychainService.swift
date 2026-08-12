@@ -253,6 +253,61 @@ extension KeychainService {
     }
 }
 
+// MARK: - Apple Ads web session (dashboard cookies)
+
+/// Session for unofficial Apple Ads Campaign Management web APIs
+/// (`app-ads.apple.com/cm/api/v2/...`). Popularity and keyword recommendations
+/// require this; the OAuth `.p8` Campaign Management API does not expose them.
+struct AppleAdsWebSession: Codable {
+    /// Raw `Cookie` header value for `app-ads.apple.com`.
+    var cookieHeader: String
+    /// Value for `X-XSRF-TOKEN-CM`, usually mirrored from the `XSRF-TOKEN-CM` cookie.
+    var xsrfToken: String?
+    var savedAt: Date
+
+    var isEmpty: Bool {
+        cookieHeader.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+extension KeychainService {
+    private var appleAdsWebSessionAccount: String { "apple-ads-web-session" }
+
+    func saveAppleAdsWebSession(_ session: AppleAdsWebSession) throws {
+        let data = try JSONEncoder().encode(session)
+        try KeychainService.write(data, service: service, account: appleAdsWebSessionAccount)
+    }
+
+    func loadAppleAdsWebSession() throws -> AppleAdsWebSession? {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: appleAdsWebSessionAccount,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            if status == errSecItemNotFound { return nil }
+            throw KeychainError.loadFailed(status)
+        }
+        return try JSONDecoder().decode(AppleAdsWebSession.self, from: data)
+    }
+
+    func deleteAppleAdsWebSession() throws {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: appleAdsWebSessionAccount
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.deleteFailed(status)
+        }
+    }
+}
+
 enum KeychainError: LocalizedError {
     case saveFailed(OSStatus)
     case loadFailed(OSStatus)
