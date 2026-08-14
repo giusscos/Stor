@@ -236,73 +236,19 @@ struct ScreenshotCanvas: View {
 
         // Gestures go on the content BEFORE .position() so they are scoped to the
         // layer's actual w×h frame, not the full canvas that .position() expands to.
-        layerContent(effective, scale: scale, w: w, h: h)
-            .onTapGesture { selectedLayerId = layer.id }
-            .gesture(layerDragGesture(layer, in: size))
-            .rotationEffect(Angle(degrees: effective.rotation))
-            .position(x: frame.midX, y: frame.midY)
-    }
-
-    @ViewBuilder
-    private func layerContent(_ layer: ScreenshotLayer, scale: CGFloat, w: CGFloat, h: CGFloat) -> some View {
-        switch layer.type {
-        case .text:
-            let pad = layer.textPaddingPt * scale
-            let radius = layer.textCornerRadiusPt * scale
-            layer.resolvedPreviewText(
-                for: previewLocale,
-                fontSize: layer.fontSizePt * scale,
-                scale: scale
-            )
-            .multilineTextAlignment(
-                layer.textAlignment == .leading ? .leading :
-                    layer.textAlignment == .trailing ? .trailing : .center
-            )
-            .padding(pad)
-            .frame(width: w, height: h, alignment: layer.textAlignment.swiftUI)
-            .background {
-                if let bgHex = layer.textBackgroundHex {
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(Color(hex: bgHex))
-                }
-            }
-            .contentShape(Rectangle())
-
-        case .image:
-            if let img = layer.loadPreviewImage() {
-                let cornerRadius = layer.imageCornerRadius * scale * max(0.01, layer.frameScale)
-                let contentRect = layer.imageContentRect(
-                    imageSize: img.size,
-                    in: CGRect(x: 0, y: 0, width: w, height: h)
-                )
-                ZStack {
-                    Image(nsImage: img)
-                        .resizable()
-                        .frame(width: contentRect.width, height: contentRect.height)
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                        .offset(
-                            x: contentRect.midX - w / 2,
-                            y: contentRect.midY - h / 2
-                        )
-                        .frame(width: w, height: h)
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-
-                    if let assetName = layer.frameAssetName,
-                       let frameImg = NSImage(named: assetName) {
-                        Image(nsImage: frameImg)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: w, height: h)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .frame(width: w, height: h)
-            }
-
-        case .shape:
-            ShapeLayerView(layer: layer, scale: scale)
-                .frame(width: w, height: h)
-        }
+        ScreenshotLayerContent(
+            layer: effective,
+            scale: scale,
+            width: w,
+            height: h,
+            locale: previewLocale,
+            usesPreviewImage: true
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { selectedLayerId = layer.id }
+        .gesture(layerDragGesture(layer, in: size), isEnabled: !effective.isLocked)
+        .rotationEffect(Angle(degrees: effective.rotation))
+        .position(x: frame.midX, y: frame.midY)
     }
 
     // MARK: - Selection UI (drawn above all layers in canvas space)
@@ -313,46 +259,54 @@ struct ScreenshotCanvas: View {
            let raw = template.layers.first(where: { $0.id == id && $0.isVisible }) {
             let effective = effectiveLayer(raw)
             let frame = effective.resolvedFrame(in: size, locale: previewLocale, fontScale: size.width / 375)
-            selectedLayerUI(layerId: id, frame: frame, rotation: effective.rotation, canvasSize: size)
+            selectedLayerUI(
+                layerId: id,
+                frame: frame,
+                rotation: effective.rotation,
+                isLocked: effective.isLocked,
+                canvasSize: size
+            )
         }
     }
 
     @ViewBuilder
-    private func selectedLayerUI(layerId: UUID, frame: CGRect, rotation: Double, canvasSize: CGSize) -> some View {
+    private func selectedLayerUI(layerId: UUID, frame: CGRect, rotation: Double, isLocked: Bool, canvasSize: CGSize) -> some View {
         let rotHandlePos = CGPoint(x: frame.midX, y: frame.minY - 24)
 
         ZStack(alignment: .topLeading) {
             // Selection border
             RoundedRectangle(cornerRadius: 2)
-                .stroke(Color.accentColor, lineWidth: 2)
+                .stroke(isLocked ? Color.secondary : Color.accentColor, lineWidth: 2)
                 .frame(width: frame.width, height: frame.height)
                 .position(x: frame.midX, y: frame.midY)
                 .allowsHitTesting(false)
 
-            // Connector line to rotation handle
-            Path { p in
-                p.move(to: CGPoint(x: frame.midX, y: frame.minY))
-                p.addLine(to: rotHandlePos)
+            if !isLocked {
+                // Connector line to rotation handle
+                Path { p in
+                    p.move(to: CGPoint(x: frame.midX, y: frame.minY))
+                    p.addLine(to: rotHandlePos)
+                }
+                .stroke(Color.accentColor, lineWidth: 1)
+                .allowsHitTesting(false)
+
+                // Rotation handle (circle above top-center)
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 10, height: 10)
+                    .overlay(Circle().stroke(Color.accentColor, lineWidth: 1.5))
+                    .gesture(rotationGesture(
+                        layerId: layerId,
+                        layerCenter: CGPoint(x: frame.midX, y: frame.midY)
+                    ))
+                    .position(rotHandlePos)
+
+                // Corner scale handles
+                cornerHandle(.topLeft,     layerId: layerId, at: CGPoint(x: frame.minX, y: frame.minY), canvasSize: canvasSize)
+                cornerHandle(.topRight,    layerId: layerId, at: CGPoint(x: frame.maxX, y: frame.minY), canvasSize: canvasSize)
+                cornerHandle(.bottomLeft,  layerId: layerId, at: CGPoint(x: frame.minX, y: frame.maxY), canvasSize: canvasSize)
+                cornerHandle(.bottomRight, layerId: layerId, at: CGPoint(x: frame.maxX, y: frame.maxY), canvasSize: canvasSize)
             }
-            .stroke(Color.accentColor, lineWidth: 1)
-            .allowsHitTesting(false)
-
-            // Rotation handle (circle above top-center)
-            Circle()
-                .fill(Color.white)
-                .frame(width: 10, height: 10)
-                .overlay(Circle().stroke(Color.accentColor, lineWidth: 1.5))
-                .gesture(rotationGesture(
-                    layerId: layerId,
-                    layerCenter: CGPoint(x: frame.midX, y: frame.midY)
-                ))
-                .position(rotHandlePos)
-
-            // Corner scale handles
-            cornerHandle(.topLeft,     layerId: layerId, at: CGPoint(x: frame.minX, y: frame.minY), canvasSize: canvasSize)
-            cornerHandle(.topRight,    layerId: layerId, at: CGPoint(x: frame.maxX, y: frame.minY), canvasSize: canvasSize)
-            cornerHandle(.bottomLeft,  layerId: layerId, at: CGPoint(x: frame.minX, y: frame.maxY), canvasSize: canvasSize)
-            cornerHandle(.bottomRight, layerId: layerId, at: CGPoint(x: frame.maxX, y: frame.maxY), canvasSize: canvasSize)
         }
         .frame(width: canvasSize.width, height: canvasSize.height)
         // Rotate the whole selection chrome around the layer center so the border

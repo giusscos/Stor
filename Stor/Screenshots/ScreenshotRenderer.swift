@@ -53,60 +53,24 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
             t.concat()
         }
 
-        switch layer.type {
-        case .text:
-            if let bgHex = layer.textBackgroundHex {
-                let radius = layer.textCornerRadiusPt * exportScale
-                let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-                NSColor(Color(hex: bgHex)).setFill()
-                path.fill()
-            }
-            let pad = layer.textPaddingPt * exportScale
-            let textRect = rect.insetBy(dx: pad, dy: pad)
-            if let attributed = layer.resolvedAttributedString(
-                for: locale,
-                fontSize: layer.fontSizePt * exportScale,
-                scale: exportScale
-            ) {
-                attributed.draw(in: textRect)
-            }
-        case .image:
-            if let img = layer.loadImage() {
-                let radius = layer.imageCornerRadius * exportScale * max(0.01, layer.frameScale)
-
-                // The bitmap context has a bottom-left origin, while imageContentRect
-                // works in top-left space — flip the offset's Y for the shared math.
-                var contentLayer = layer
-                contentLayer.contentOffsetY = -layer.contentOffsetY
-                let drawRect = contentLayer.imageContentRect(imageSize: img.size, in: rect)
-
-                NSGraphicsContext.saveGraphicsState()
-                if radius > 0 {
-                    // Round the image's own corners (visible in fit mode) and the layer
-                    // bounds (visible in fill/zoomed mode) — mirrors the preview clips.
-                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).addClip()
-                    NSBezierPath(roundedRect: drawRect, xRadius: radius, yRadius: radius).addClip()
-                } else {
-                    NSBezierPath(rect: rect).addClip()
-                }
-                img.draw(in: drawRect)
-                NSGraphicsContext.restoreGraphicsState()
-
-                if let assetName = layer.frameAssetName,
-                   let frameImg = NSImage(named: assetName) {
-                    frameImg.draw(in: ScreenshotLayer.deviceFrameRect(frameSize: frameImg.size, in: rect))
-                }
-            }
-
-        case .shape:
-            let shapeView = ShapeLayerView(layer: layer, scale: exportScale)
-                .frame(width: rect.width, height: rect.height)
-            let shapeRenderer = ImageRenderer(content: shapeView)
-            shapeRenderer.proposedSize = ProposedViewSize(width: rect.width, height: rect.height)
-            shapeRenderer.scale = 1
-            if let shapeImage = shapeRenderer.nsImage {
-                shapeImage.draw(in: rect)
-            }
+        // Rasterize the same SwiftUI view the canvas draws (including shadows) so
+        // the PNG stays WYSIWYG. Drop shadows extend outside the layer frame, so
+        // the render is padded and then drawn centered on `rect`.
+        let pad = layer.dropShadow.rasterPadding(scale: exportScale)
+        if let layerImage = renderLayerImage(
+            layer,
+            size: CGSize(width: rect.width, height: rect.height),
+            scale: exportScale,
+            locale: locale,
+            padding: pad
+        ) {
+            let drawRect = CGRect(
+                x: rect.minX - pad,
+                y: rect.minY - pad,
+                width: rect.width + pad * 2,
+                height: rect.height + pad * 2
+            )
+            layerImage.draw(in: drawRect)
         }
 
         if layer.rotation != 0 {
@@ -121,6 +85,32 @@ func renderTemplate(_ template: ScreenshotTemplate, locale: String? = nil) -> Da
     guard let tiff = image.tiffRepresentation,
           let pngRep = NSBitmapImageRep(data: tiff) else { return nil }
     return pngRep.representation(using: .png, properties: [:])
+}
+
+@MainActor
+private func renderLayerImage(
+    _ layer: ScreenshotLayer,
+    size: CGSize,
+    scale: CGFloat,
+    locale: String?,
+    padding: CGFloat
+) -> NSImage? {
+    let padded = CGSize(width: size.width + padding * 2, height: size.height + padding * 2)
+    let view = ScreenshotLayerContent(
+        layer: layer,
+        scale: scale,
+        width: size.width,
+        height: size.height,
+        locale: locale,
+        usesPreviewImage: false
+    )
+    .padding(padding)
+    .frame(width: padded.width, height: padded.height)
+
+    let renderer = ImageRenderer(content: view)
+    renderer.proposedSize = ProposedViewSize(width: padded.width, height: padded.height)
+    renderer.scale = 1
+    return renderer.nsImage
 }
 
 @MainActor

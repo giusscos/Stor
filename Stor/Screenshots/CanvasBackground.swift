@@ -400,6 +400,9 @@ struct ShapeLayerView: View {
     var body: some View {
         ZStack {
             fillView
+            if layer.innerShadow.isEnabled {
+                InnerShadowOverlay(shape: clipShape, shadow: layer.innerShadow, scale: scale)
+            }
             if layer.shapeStrokeWidth > 0 {
                 clipShape.stroke(
                     Color(hex: layer.shapeStrokeColorHex),
@@ -417,7 +420,6 @@ struct ShapeLayerView: View {
         case .none:
             CanvasBackgroundFill(background: fill)
                 .clipShape(shape)
-                .opacity(layer.shapeOpacity)
         case .blur:
             ZStack {
                 Color.clear
@@ -425,7 +427,6 @@ struct ShapeLayerView: View {
                     .clipShape(shape)
                 CanvasBackgroundFill(background: fill)
                     .clipShape(shape)
-                    .opacity(layer.shapeOpacity)
             }
         case .glass:
             Color.clear
@@ -437,7 +438,7 @@ struct ShapeLayerView: View {
         let hex = fill.kind == .solid
             ? fill.solidHex
             : fill.sortedStops.first?.hex ?? fill.solidHex
-        return Color(hex: hex).opacity(layer.shapeOpacity)
+        return Color(hex: hex)
     }
 }
 

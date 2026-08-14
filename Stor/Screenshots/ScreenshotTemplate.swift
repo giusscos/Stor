@@ -124,6 +124,9 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     var widthFraction: Double
     var heightFraction: Double
     var isVisible: Bool
+    /// When true, canvas drag / resize / rotate and arrow-key nudge are ignored so
+    /// the layer can sit as a backdrop while other items are edited.
+    var isLocked: Bool
     var frameAssetName: String?
     var imageCornerRadius: Double
     /// When true, image scales to fill the layer bounds (cropping if needed). False = fit (letterbox).
@@ -177,9 +180,16 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     var shapeFill: CanvasBackground?
     var shapeCornerRadiusPt: Double
     var shapeBlurRadius: Double
-    var shapeOpacity: Double
+    /// Layer-wide opacity (text, image, and shape). `shapeOpacity` remains as a
+    /// Codable alias so templates saved before this field still decode.
+    var opacity: Double
     var shapeStrokeColorHex: String
     var shapeStrokeWidth: Double
+
+    // Shadows — shared across text, image, and shape. Disabled by default; toggling
+    // on keeps the last-edited color/blur/offset so turning a shadow off isn't destructive.
+    var dropShadow: LayerShadow
+    var innerShadow: LayerShadow
 
     /// Image bytes for this layer, resolved through the store.
     var imageData: Data? {
@@ -219,6 +229,22 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
 
     var resolvedShapeFill: CanvasBackground {
         shapeFill ?? CanvasBackground.shapeDefault
+    }
+
+    /// Kept so existing inspector/render call sites and the legacy JSON key stay valid.
+    var shapeOpacity: Double {
+        get { opacity }
+        set { opacity = newValue }
+    }
+
+    var strokeWidth: Double {
+        get { shapeStrokeWidth }
+        set { shapeStrokeWidth = newValue }
+    }
+
+    var strokeColorHex: String {
+        get { shapeStrokeColorHex }
+        set { shapeStrokeColorHex = newValue }
     }
 
     /// Moves any legacy inline image bytes into the store. Returns true when something
@@ -286,6 +312,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         self.widthFraction = 0.8
         self.heightFraction = type == .text ? 0.1 : 0.4
         self.isVisible = true
+        self.isLocked = false
         self.frameAssetName = nil
         self.imageCornerRadius = 0
         self.imageFills = false
@@ -317,9 +344,11 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         self.shapeFill = type == .shape ? CanvasBackground.shapeDefault : nil
         self.shapeCornerRadiusPt = 20
         self.shapeBlurRadius = 10
-        self.shapeOpacity = 1.0
+        self.opacity = 1.0
         self.shapeStrokeColorHex = "#FFFFFF"
         self.shapeStrokeWidth = type == .shape ? 2.0 : 0
+        self.dropShadow = .drop
+        self.innerShadow = .inner
     }
 
     /// Label shown in the layers list: custom name when set, otherwise text preview or "Image".
@@ -349,7 +378,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, name, xFraction, yFraction, widthFraction, heightFraction, isVisible, frameAssetName, imageCornerRadius, imageFills
+        case id, type, name, xFraction, yFraction, widthFraction, heightFraction, isVisible, isLocked, frameAssetName, imageCornerRadius, imageFills
         case frameScale
         case contentScale, contentOffsetX, contentOffsetY
         case text, translations, fontSizePt, colorHex, isBold, fontFamily, fontWeightRaw, isItalic, tracking, alignmentRaw
@@ -359,8 +388,9 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         /// Legacy key: inline bytes from templates saved before the image store existed.
         case imageData
         case rotation
-        case shapeKindRaw, shapeEffectRaw, shapeFill, shapeCornerRadiusPt, shapeBlurRadius, shapeOpacity
+        case shapeKindRaw, shapeEffectRaw, shapeFill, shapeCornerRadiusPt, shapeBlurRadius, shapeOpacity, opacity
         case shapeStrokeColorHex, shapeStrokeWidth
+        case dropShadow, innerShadow
     }
 
     init(from decoder: Decoder) throws {
@@ -373,6 +403,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         widthFraction = try c.decodeIfPresent(Double.self, forKey: .widthFraction) ?? 0.8
         heightFraction = try c.decodeIfPresent(Double.self, forKey: .heightFraction) ?? 0.1
         isVisible = try c.decodeIfPresent(Bool.self, forKey: .isVisible) ?? true
+        isLocked = try c.decodeIfPresent(Bool.self, forKey: .isLocked) ?? false
         frameAssetName = try c.decodeIfPresent(String.self, forKey: .frameAssetName)
         imageCornerRadius = try c.decodeIfPresent(Double.self, forKey: .imageCornerRadius) ?? 0
         imageFills = try c.decodeIfPresent(Bool.self, forKey: .imageFills) ?? false
@@ -408,9 +439,12 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         shapeFill = try c.decodeIfPresent(CanvasBackground.self, forKey: .shapeFill)
         shapeCornerRadiusPt = try c.decodeIfPresent(Double.self, forKey: .shapeCornerRadiusPt) ?? 20
         shapeBlurRadius = try c.decodeIfPresent(Double.self, forKey: .shapeBlurRadius) ?? 10
-        shapeOpacity = try c.decodeIfPresent(Double.self, forKey: .shapeOpacity) ?? 1.0
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity)
+            ?? (try c.decodeIfPresent(Double.self, forKey: .shapeOpacity) ?? 1.0)
         shapeStrokeColorHex = try c.decodeIfPresent(String.self, forKey: .shapeStrokeColorHex) ?? "#FFFFFF"
         shapeStrokeWidth = try c.decodeIfPresent(Double.self, forKey: .shapeStrokeWidth) ?? 0
+        dropShadow = try c.decodeIfPresent(LayerShadow.self, forKey: .dropShadow) ?? .drop
+        innerShadow = try c.decodeIfPresent(LayerShadow.self, forKey: .innerShadow) ?? .inner
     }
 
     /// Written explicitly so the legacy `imageData` key is never re-emitted.
@@ -424,6 +458,7 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         try c.encode(widthFraction, forKey: .widthFraction)
         try c.encode(heightFraction, forKey: .heightFraction)
         try c.encode(isVisible, forKey: .isVisible)
+        try c.encode(isLocked, forKey: .isLocked)
         try c.encodeIfPresent(frameAssetName, forKey: .frameAssetName)
         try c.encode(imageCornerRadius, forKey: .imageCornerRadius)
         try c.encode(imageFills, forKey: .imageFills)
@@ -454,9 +489,12 @@ struct ScreenshotLayer: Codable, Identifiable, Equatable {
         try c.encodeIfPresent(shapeFill, forKey: .shapeFill)
         try c.encode(shapeCornerRadiusPt, forKey: .shapeCornerRadiusPt)
         try c.encode(shapeBlurRadius, forKey: .shapeBlurRadius)
-        try c.encode(shapeOpacity, forKey: .shapeOpacity)
+        try c.encode(opacity, forKey: .opacity)
+        try c.encode(opacity, forKey: .shapeOpacity)
         try c.encode(shapeStrokeColorHex, forKey: .shapeStrokeColorHex)
         try c.encode(shapeStrokeWidth, forKey: .shapeStrokeWidth)
+        try c.encode(dropShadow, forKey: .dropShadow)
+        try c.encode(innerShadow, forKey: .innerShadow)
     }
 }
 
@@ -496,6 +534,53 @@ extension ScreenshotLayer {
             height: height
         )
     }
+
+    /// Layout box as a fraction of the canvas: fitted text size when hug-to-content
+    /// is on, otherwise the stored width/height (plus image `frameScale`).
+    func alignedSizeFractions(in canvasSize: CGSize, locale: String?, fontScale: CGFloat) -> (width: Double, height: Double) {
+        let pixel = resolvedSize(in: canvasSize, locale: locale, fontScale: fontScale)
+        return (
+            width: pixel.width / max(canvasSize.width, 1),
+            height: pixel.height / max(canvasSize.height, 1)
+        )
+    }
+
+    mutating func alignToCanvas(
+        horizontal: LayerCanvasAlign.Horizontal? = nil,
+        vertical: LayerCanvasAlign.Vertical? = nil,
+        canvasSize: CGSize,
+        locale: String?,
+        fontScale: CGFloat
+    ) {
+        let size = alignedSizeFractions(in: canvasSize, locale: locale, fontScale: fontScale)
+        if let horizontal {
+            switch horizontal {
+            case .left: xFraction = 0
+            case .center: xFraction = (1 - size.width) / 2
+            case .right: xFraction = 1 - size.width
+            }
+        }
+        if let vertical {
+            switch vertical {
+            case .top: yFraction = 0
+            case .middle: yFraction = (1 - size.height) / 2
+            case .bottom: yFraction = 1 - size.height
+            }
+        }
+    }
+
+    /// Rotation folded into -180...180 so the inspector slider can represent any canvas angle.
+    var normalizedRotation: Double {
+        var wrapped = rotation.truncatingRemainder(dividingBy: 360)
+        if wrapped > 180 { wrapped -= 360 }
+        if wrapped <= -180 { wrapped += 360 }
+        return wrapped
+    }
+}
+
+enum LayerCanvasAlign {
+    enum Horizontal { case left, center, right }
+    enum Vertical { case top, middle, bottom }
 }
 
 // MARK: - Image layer style (copy / paste / presets)

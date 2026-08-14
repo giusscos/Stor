@@ -166,3 +166,162 @@ struct ScreenshotLayerTextTests {
         #expect(layer.isBold == true)
     }
 }
+
+struct LayerShadowTests {
+    @Test func disabledDropShadowNeedsNoRasterPadding() {
+        #expect(LayerShadow.drop.rasterPadding(scale: 2) == 0)
+    }
+
+    @Test func rasterPaddingGrowsWithBlurOffsetAndScale() {
+        var shadow = LayerShadow.drop
+        shadow.isEnabled = true
+        shadow.blur = 10
+        shadow.offsetX = 0
+        shadow.offsetY = 8
+
+        #expect(shadow.rasterPadding(scale: 1) == 38)
+        #expect(shadow.rasterPadding(scale: 2) == 76)
+    }
+
+    @Test func legacyLayerJSONOmittingShadowsStillDecodes() throws {
+        let data = Data(#"{"type":"text"}"#.utf8)
+        let layer = try JSONDecoder().decode(ScreenshotLayer.self, from: data)
+
+        #expect(layer.dropShadow == .drop)
+        #expect(layer.innerShadow == .inner)
+    }
+
+    @Test func enabledShadowsRoundTripThroughJSON() throws {
+        var layer = ScreenshotLayer(type: .image)
+        layer.dropShadow.isEnabled = true
+        layer.dropShadow.blur = 30
+        layer.dropShadow.offsetY = 12
+        layer.innerShadow.isEnabled = true
+        layer.innerShadow.opacity = 0.5
+
+        let decoded = try JSONDecoder().decode(
+            ScreenshotLayer.self,
+            from: try JSONEncoder().encode(layer)
+        )
+
+        #expect(decoded.dropShadow == layer.dropShadow)
+        #expect(decoded.innerShadow == layer.innerShadow)
+    }
+
+    @Test func textInnerShadowRequiresABackground() {
+        var layer = ScreenshotLayer(type: .text)
+        #expect(layer.supportsInnerShadow == false)
+
+        layer.hasTextBackground = true
+        #expect(layer.supportsInnerShadow == true)
+    }
+
+    @Test func imageAndShapeAlwaysSupportInnerShadow() {
+        #expect(ScreenshotLayer(type: .image).supportsInnerShadow)
+        #expect(ScreenshotLayer(type: .shape).supportsInnerShadow)
+    }
+}
+
+struct LayerAppearanceTests {
+    @Test func legacyShapeOpacityMigratesToLayerOpacity() throws {
+        let data = Data(#"{"type":"shape","shapeOpacity":0.4}"#.utf8)
+        let layer = try JSONDecoder().decode(ScreenshotLayer.self, from: data)
+        #expect(abs(layer.opacity - 0.4) < 0.0001)
+    }
+
+    @Test func opacityAndLockRoundTrip() throws {
+        var layer = ScreenshotLayer(type: .text)
+        layer.opacity = 0.55
+        layer.isLocked = true
+        layer.strokeWidth = 3
+        layer.strokeColorHex = "#FF0000"
+
+        let decoded = try JSONDecoder().decode(
+            ScreenshotLayer.self,
+            from: try JSONEncoder().encode(layer)
+        )
+
+        #expect(abs(decoded.opacity - 0.55) < 0.0001)
+        #expect(decoded.isLocked)
+        #expect(decoded.strokeWidth == 3)
+        #expect(decoded.strokeColorHex == "#FF0000")
+        #expect(decoded.shapeOpacity == decoded.opacity)
+    }
+
+    @Test func textStrokeRequiresABackground() {
+        var layer = ScreenshotLayer(type: .text)
+        #expect(layer.supportsStroke == false)
+        layer.hasTextBackground = true
+        #expect(layer.supportsStroke == true)
+    }
+
+    @Test func alignToCanvasCentersAndPinsEdges() {
+        var layer = ScreenshotLayer(type: .shape)
+        layer.widthFraction = 0.4
+        layer.heightFraction = 0.2
+        layer.xFraction = 0.1
+        layer.yFraction = 0.1
+        let canvas = CGSize(width: 100, height: 100)
+
+        layer.alignToCanvas(horizontal: .center, canvasSize: canvas, locale: nil, fontScale: 1)
+        #expect(abs(layer.xFraction - 0.3) < 0.0001)
+
+        layer.alignToCanvas(vertical: .middle, canvasSize: canvas, locale: nil, fontScale: 1)
+        #expect(abs(layer.yFraction - 0.4) < 0.0001)
+
+        layer.alignToCanvas(horizontal: .left, vertical: .top, canvasSize: canvas, locale: nil, fontScale: 1)
+        #expect(layer.xFraction == 0)
+        #expect(layer.yFraction == 0)
+
+        layer.alignToCanvas(horizontal: .right, vertical: .bottom, canvasSize: canvas, locale: nil, fontScale: 1)
+        #expect(abs(layer.xFraction - 0.6) < 0.0001)
+        #expect(abs(layer.yFraction - 0.8) < 0.0001)
+    }
+
+    @Test func imageAlignAccountsForFrameScale() {
+        var layer = ScreenshotLayer(type: .image)
+        layer.widthFraction = 0.4
+        layer.frameScale = 2
+        let canvas = CGSize(width: 100, height: 100)
+        layer.alignToCanvas(horizontal: .center, canvasSize: canvas, locale: nil, fontScale: 1)
+        // Visual width is 0.8 of the canvas, so x = (1 - 0.8) / 2
+        #expect(abs(layer.xFraction - 0.1) < 0.0001)
+    }
+
+    @Test func fitToContentAlignUsesMeasuredTextNotStoredWidth() {
+        var layer = ScreenshotLayer(type: .text)
+        layer.text = "Hi"
+        layer.fitWidthToContent = true
+        layer.widthFraction = 0.8
+        layer.xFraction = 0
+        let canvas = CGSize(width: 375, height: 812)
+
+        layer.alignToCanvas(horizontal: .center, canvasSize: canvas, locale: nil, fontScale: 1)
+        let visual = layer.resolvedSize(in: canvas, locale: nil, fontScale: 1)
+        let expected = (canvas.width - visual.width) / 2 / canvas.width
+
+        #expect(abs(layer.xFraction - expected) < 0.001)
+        // Stale widthFraction of 0.8 would have produced 0.1 — that's the bug.
+        #expect(abs(layer.xFraction - 0.1) > 0.05)
+
+        layer.alignToCanvas(horizontal: .right, canvasSize: canvas, locale: nil, fontScale: 1)
+        let expectedRight = (canvas.width - visual.width) / canvas.width
+        #expect(abs(layer.xFraction - expectedRight) < 0.001)
+    }
+
+    @Test func normalizedRotationWrapsIntoPlusMinus180() {
+        var layer = ScreenshotLayer(type: .text)
+        layer.rotation = 270
+        #expect(abs(layer.normalizedRotation - (-90)) < 0.0001)
+        layer.rotation = -270
+        #expect(abs(layer.normalizedRotation - 90) < 0.0001)
+        layer.rotation = 15
+        #expect(abs(layer.normalizedRotation - 15) < 0.0001)
+    }
+
+    @Test func newNonShapeLayersHaveNoStrokeByDefault() {
+        #expect(ScreenshotLayer(type: .text).strokeWidth == 0)
+        #expect(ScreenshotLayer(type: .image).strokeWidth == 0)
+        #expect(ScreenshotLayer(type: .shape).strokeWidth == 2)
+    }
+}

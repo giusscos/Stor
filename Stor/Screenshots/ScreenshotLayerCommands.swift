@@ -17,6 +17,8 @@ struct ScreenshotLayerCommands {
     var sendBackward: () -> Void = {}
     var sendToBack: () -> Void = {}
     var delete: () -> Void = {}
+    var isLocked = false
+    var toggleLock: () -> Void = {}
 }
 
 struct ScreenshotLayerCommandsKey: FocusedValueKey {
@@ -66,6 +68,14 @@ struct ScreenshotLayerMenu: Commands {
             Button("Send to Back", action: commands?.sendToBack ?? {})
                 .keyboardShortcut("[", modifiers: [.command, .shift])
                 .disabled(!(commands?.canMoveBackward ?? false))
+
+            Divider()
+
+            Button(commands?.isLocked == true ? "Unlock" : "Lock") {
+                (commands?.toggleLock ?? {})()
+            }
+            .keyboardShortcut("l", modifiers: .command)
+            .disabled(!(commands?.hasSelection ?? false))
 
             Divider()
 

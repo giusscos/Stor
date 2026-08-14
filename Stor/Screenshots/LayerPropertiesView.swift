@@ -22,6 +22,12 @@ struct LayerListRow: View {
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 .frame(width: 16)
 
+            if layer.isLocked {
+                Image(systemName: "lock.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             if isRenaming {
                 TextField("Image", text: $draftName)
                     .textFieldStyle(.plain)
@@ -82,6 +88,7 @@ struct LayerPropertiesView: View {
     var availableLocales: [String]
     var onLocaleChange: (String) -> Void
     @Binding var livePreview: ScreenshotLayer?
+    var canvasSize: CGSize
 
     @ObservedObject private var styleStore = ImageLayerStyleStore.shared
     @State private var activeMarkdownFormats: Set<MarkdownInlineFormat> = []
@@ -97,6 +104,17 @@ struct LayerPropertiesView: View {
         { newValue in
             var preview = layer
             preview[keyPath: keyPath] = newValue
+            livePreview = preview
+        }
+    }
+
+    private func liveShadow(
+        _ shadow: WritableKeyPath<ScreenshotLayer, LayerShadow>,
+        _ property: WritableKeyPath<LayerShadow, Double>
+    ) -> (Double) -> Void {
+        { newValue in
+            var preview = layer
+            preview[keyPath: shadow][keyPath: property] = newValue
             livePreview = preview
         }
     }
@@ -485,37 +503,6 @@ struct LayerPropertiesView: View {
                                 onEditEnd: endLivePreview
                             )
                         }
-
-                        BufferedPercentSlider(
-                            title: "Opacity",
-                            value: Binding(get: { layer.shapeOpacity }, set: { layer.shapeOpacity = $0 }),
-                            range: 0...1,
-                            onLiveChange: liveUpdate(\.shapeOpacity),
-                            onEditEnd: endLivePreview
-                        )
-
-                        Divider()
-
-                        Text("Stroke")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        BufferedValueSlider(
-                            title: "Width",
-                            value: Binding(get: { layer.shapeStrokeWidth }, set: { layer.shapeStrokeWidth = $0 }),
-                            range: 0...20,
-                            onLiveChange: liveUpdate(\.shapeStrokeWidth),
-                            onEditEnd: endLivePreview
-                        )
-
-                        InspectorLabeledRow("Color") {
-                            ColorPicker("", selection: Binding(
-                                get: { Color(hex: layer.shapeStrokeColorHex) },
-                                set: { layer.shapeStrokeColorHex = $0.toHex() }
-                            ))
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
                     }
                 }
 
@@ -526,6 +513,72 @@ struct LayerPropertiesView: View {
                             set: { layer.shapeFill = $0 }
                         ),
                         title: nil
+                    )
+                }
+            }
+
+            InspectorSection(title: "Appearance") {
+                VStack(alignment: .leading, spacing: 12) {
+                    BufferedPercentSlider(
+                        title: "Opacity",
+                        value: Binding(get: { layer.opacity }, set: { layer.opacity = $0 }),
+                        range: 0...1,
+                        onLiveChange: liveUpdate(\.opacity),
+                        onEditEnd: endLivePreview
+                    )
+
+                    Divider()
+
+                    Text("Stroke")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    if layer.supportsStroke {
+                        BufferedValueSlider(
+                            title: "Width",
+                            value: Binding(get: { layer.strokeWidth }, set: { layer.strokeWidth = $0 }),
+                            range: 0...20,
+                            onLiveChange: liveUpdate(\.shapeStrokeWidth),
+                            onEditEnd: endLivePreview
+                        )
+
+                        InspectorLabeledRow("Color") {
+                            ColorPicker(
+                                "",
+                                selection: Binding(
+                                    get: { Color(hex: layer.strokeColorHex) },
+                                    set: { layer.strokeColorHex = $0.toHex() }
+                                ),
+                                supportsOpacity: false
+                            )
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    } else {
+                        Text("Add a text background to use a stroke")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+
+            InspectorSection(title: "Shadow") {
+                VStack(alignment: .leading, spacing: 12) {
+                    shadowGroup(
+                        "Outer",
+                        shadow: $layer.dropShadow,
+                        keyPath: \.dropShadow,
+                        enabled: true
+                    )
+
+                    Divider()
+
+                    shadowGroup(
+                        "Inner",
+                        shadow: $layer.innerShadow,
+                        keyPath: \.innerShadow,
+                        enabled: layer.supportsInnerShadow,
+                        disabledHelp: "Add a text background to use an inner shadow"
                     )
                 }
             }
@@ -565,7 +618,53 @@ struct LayerPropertiesView: View {
                         }
                     }
 
+                    BufferedValueSlider(
+                        title: "Angle",
+                        value: Binding(
+                            get: { layer.normalizedRotation },
+                            set: { layer.rotation = $0 }
+                        ),
+                        range: -180...180,
+                        onLiveChange: { newValue in
+                            var preview = layer
+                            preview.rotation = newValue
+                            livePreview = preview
+                        },
+                        onEditEnd: endLivePreview
+                    )
+                    .help("Rotation in degrees. Drag the handle on the canvas, or type an angle here.")
+
+                    InspectorLabeledRow("Align") {
+                        VStack(alignment: .trailing, spacing: 4) {
+                            HStack(spacing: 4) {
+                                canvasAlignButton("align.horizontal.left", help: "Align left") {
+                                    alignToCanvas(horizontal: .left)
+                                }
+                                canvasAlignButton("align.horizontal.center", help: "Center horizontally") {
+                                    alignToCanvas(horizontal: .center)
+                                }
+                                canvasAlignButton("align.horizontal.right", help: "Align right") {
+                                    alignToCanvas(horizontal: .right)
+                                }
+                            }
+                            HStack(spacing: 4) {
+                                canvasAlignButton("align.vertical.top", help: "Align top") {
+                                    alignToCanvas(vertical: .top)
+                                }
+                                canvasAlignButton("align.vertical.center", help: "Center vertically") {
+                                    alignToCanvas(vertical: .middle)
+                                }
+                                canvasAlignButton("align.vertical.bottom", help: "Align bottom") {
+                                    alignToCanvas(vertical: .bottom)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
+
                     Toggle("Visible", isOn: $layer.isVisible)
+                    Toggle("Locked", isOn: $layer.isLocked)
+                        .help("Prevent dragging, resizing, rotating, and arrow-key nudge on the canvas")
                 }
             }
         }
@@ -610,6 +709,30 @@ struct LayerPropertiesView: View {
         }
     }
 
+    private func alignToCanvas(
+        horizontal: LayerCanvasAlign.Horizontal? = nil,
+        vertical: LayerCanvasAlign.Vertical? = nil
+    ) {
+        layer.alignToCanvas(
+            horizontal: horizontal,
+            vertical: vertical,
+            canvasSize: canvasSize,
+            locale: previewLocale,
+            fontScale: canvasSize.width / 375
+        )
+    }
+
+    private func canvasAlignButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 20)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help(help)
+    }
+
     private func markdownFormatButton(
         systemName: String,
         help: String,
@@ -642,6 +765,78 @@ struct LayerPropertiesView: View {
     private func ensureMarkdownEnabled() {
         if !layer.textUsesMarkdown {
             layer.textUsesMarkdown = true
+        }
+    }
+
+    @ViewBuilder
+    private func shadowGroup(
+        _ title: String,
+        shadow: Binding<LayerShadow>,
+        keyPath: WritableKeyPath<ScreenshotLayer, LayerShadow>,
+        enabled: Bool,
+        disabledHelp: String? = nil
+    ) -> some View {
+        Toggle(title, isOn: shadow.isEnabled)
+            .disabled(!enabled)
+            .help(enabled ? "\(title) shadow on this layer" : (disabledHelp ?? ""))
+
+        if shadow.wrappedValue.isEnabled, enabled {
+            InspectorLabeledRow("Color") {
+                ColorPicker(
+                    "",
+                    selection: Binding(
+                        get: { Color(hex: shadow.wrappedValue.colorHex) },
+                        set: { shadow.wrappedValue.colorHex = $0.toHex() }
+                    ),
+                    supportsOpacity: false
+                )
+                .labelsHidden()
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+
+            BufferedPercentSlider(
+                title: "Opacity",
+                value: Binding(
+                    get: { shadow.wrappedValue.opacity },
+                    set: { shadow.wrappedValue.opacity = $0 }
+                ),
+                range: 0...1,
+                onLiveChange: liveShadow(keyPath, \.opacity),
+                onEditEnd: endLivePreview
+            )
+
+            BufferedValueSlider(
+                title: "Blur",
+                value: Binding(
+                    get: { shadow.wrappedValue.blur },
+                    set: { shadow.wrappedValue.blur = $0 }
+                ),
+                range: 0...80,
+                onLiveChange: liveShadow(keyPath, \.blur),
+                onEditEnd: endLivePreview
+            )
+
+            BufferedValueSlider(
+                title: "X",
+                value: Binding(
+                    get: { shadow.wrappedValue.offsetX },
+                    set: { shadow.wrappedValue.offsetX = $0 }
+                ),
+                range: -80...80,
+                onLiveChange: liveShadow(keyPath, \.offsetX),
+                onEditEnd: endLivePreview
+            )
+
+            BufferedValueSlider(
+                title: "Y",
+                value: Binding(
+                    get: { shadow.wrappedValue.offsetY },
+                    set: { shadow.wrappedValue.offsetY = $0 }
+                ),
+                range: -80...80,
+                onLiveChange: liveShadow(keyPath, \.offsetY),
+                onEditEnd: endLivePreview
+            )
         }
     }
 

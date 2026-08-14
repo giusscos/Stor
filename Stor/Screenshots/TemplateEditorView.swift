@@ -175,7 +175,9 @@ struct TemplateEditorView: View {
             bringForward: { moveSelectedLayer(by: 1) },
             sendBackward: { moveSelectedLayer(by: -1) },
             sendToBack: { moveSelectedLayerToEdge(front: false) },
-            delete: deleteSelectedLayer
+            delete: deleteSelectedLayer,
+            isLocked: selectedLayerIndex.map { template.layers[$0].isLocked } ?? false,
+            toggleLock: toggleLockSelectedLayer
         )
     }
 
@@ -390,7 +392,8 @@ struct TemplateEditorView: View {
                             primaryLocale: primaryLocale,
                             availableLocales: availableLocales,
                             onLocaleChange: onLocaleChange,
-                            livePreview: $livePreviewLayer
+                            livePreview: $livePreviewLayer,
+                            canvasSize: template.deviceType.canvasSize
                         )
                     }
                 }
@@ -471,11 +474,20 @@ struct TemplateEditorView: View {
         }
     }
 
+    private func toggleLockSelectedLayer() {
+        guard let index = selectedLayerIndex else { return }
+        let locking = !template.layers[index].isLocked
+        mutate(locking ? "Lock Layer" : "Unlock Layer") {
+            template.layers[index].isLocked = locking
+        }
+    }
+
     private func duplicateSelectedLayer() {
         guard let index = selectedLayerIndex else { return }
         mutate("Duplicate Layer") {
             var copy = template.layers[index]
             copy.id = UUID()
+            copy.isLocked = false
             // Offset slightly so the duplicate is visibly distinct from the original.
             copy.xFraction = min(0.95, copy.xFraction + 0.02)
             copy.yFraction = min(0.95, copy.yFraction + 0.02)
@@ -493,6 +505,7 @@ struct TemplateEditorView: View {
         guard var copy = clipboardLayer else { return }
         mutate("Paste Layer") {
             copy.id = UUID()
+            copy.isLocked = false
             copy.xFraction = min(0.95, copy.xFraction + 0.02)
             copy.yFraction = min(0.95, copy.yFraction + 0.02)
             template.layers.append(copy)
@@ -522,6 +535,7 @@ struct TemplateEditorView: View {
     /// Arrow-key nudge. Shift moves in larger steps, matching common design tools.
     private func nudgeSelectedLayer(dx: Double, dy: Double) {
         guard let index = selectedLayerIndex else { return }
+        guard !template.layers[index].isLocked else { return }
         mutate("Move Layer", coalesce: true) {
             var layer = template.layers[index]
             layer.xFraction = min(1, max(-0.5, layer.xFraction + dx))

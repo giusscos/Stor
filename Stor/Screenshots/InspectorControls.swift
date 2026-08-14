@@ -140,7 +140,7 @@ struct BufferedValueSlider: View {
             Text(format?(local) ?? "\(Int(local))")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 28, alignment: .trailing)
+                .frame(width: 36, alignment: .trailing)
         }
         .onAppear { local = value }
         .onChange(of: local) { _, v in if dragging { onLiveChange?(v) } }
