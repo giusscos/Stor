@@ -379,7 +379,7 @@ struct ScreenshotCanvas: View {
                 let yF = (center.y - h / 2) / canvasSize.height
                 let wF = src.widthFraction * (w / max(frame0.width, 1))
                 let hF = src.heightFraction * (h / max(frame0.height, 1))
-                scaleOverride = (layerId, xF, yF, wF, hF)
+                scaleOverride = (layerId, Double(xF), Double(yF), Double(wF), Double(hF))
             }
             .onEnded { _ in
                 if let o = scaleOverride, o.id == layerId,
@@ -415,7 +415,7 @@ struct ScreenshotCanvas: View {
                 let startVec = CGPoint(x: value.startLocation.x - layerCenter.x, y: value.startLocation.y - layerCenter.y)
                 let curVec = CGPoint(x: value.location.x - layerCenter.x, y: value.location.y - layerCenter.y)
                 let delta = (atan2(curVec.y, curVec.x) - atan2(startVec.y, startVec.x)) * 180 / .pi
-                rotationOverride = (layerId, state.initialDegrees + delta)
+                rotationOverride = (layerId, state.initialDegrees + Double(delta))
             }
             .onEnded { _ in
                 if let o = rotationOverride, o.id == layerId,
@@ -447,7 +447,7 @@ struct ScreenshotCanvas: View {
                 // off-canvas layers visible and grabbable.
                 let newX = start.x + value.translation.width / size.width
                 let newY = start.y + value.translation.height / size.height
-                dragOverride = (id: layer.id, x: newX, y: newY)
+                dragOverride = (id: layer.id, x: Double(newX), y: Double(newY))
             }
             .onEnded { _ in
                 if let o = dragOverride, o.id == layer.id,
@@ -469,8 +469,8 @@ struct ScreenshotCanvas: View {
 
     private func handleDrop(providers: [NSItemProvider], at location: CGPoint, canvasSize: CGSize) {
         guard let provider = providers.first else { return }
-        let xFrac = max(0, min(0.25, location.x / canvasSize.width - 0.35))
-        let yFrac = max(0, min(0.45, location.y / canvasSize.height - 0.25))
+        let xFrac = Double(max(0, min(0.25, location.x / canvasSize.width - 0.35)))
+        let yFrac = Double(max(0, min(0.45, location.y / canvasSize.height - 0.25)))
 
         provider.loadObject(ofClass: NSImage.self) { object, _ in
             guard let image = object as? NSImage,
