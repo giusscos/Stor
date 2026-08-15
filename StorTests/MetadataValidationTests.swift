@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// Over-limit fields are rejected by App Store Connect with a generic 409, so the push path
 /// depends on catching them locally first.

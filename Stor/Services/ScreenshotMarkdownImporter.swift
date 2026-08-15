@@ -237,7 +237,7 @@ enum ScreenshotMarkdownImporter {
         let resolvedLocales = locales.isEmpty ? [primaryLocale] : locales.sorted()
         let header = """
         <!--
-        Stor screenshot text import template
+        AscendKit screenshot text import template
         1. Keep `# Locale: xx-XX` headers (App Store Connect locale codes).
         2. Keep `### <layer-uuid>` headings — they match text layers on import.
         3. Translate the text under each layer. Leave blank to skip that layer.
@@ -256,7 +256,7 @@ enum ScreenshotMarkdownImporter {
     static func sampleTemplate(locales: [String] = ["en-US", "de-DE", "fr-FR"]) -> String {
         let header = """
         <!--
-        Stor screenshot text import template
+        AscendKit screenshot text import template
         Create screenshot templates with text layers first, then Export Texts to get a filled file.
         -->
 

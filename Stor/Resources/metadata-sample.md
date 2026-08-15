@@ -1,5 +1,5 @@
 <!--
-Stor metadata import template
+AscendKit metadata import template
 1. Keep the `# Locale: xx-XX` headers (App Store Connect locale codes).
 2. Fill in each ## field. Leave a field blank to skip it on import.
 3. Import this file from the Listing tab → Import Markdown.

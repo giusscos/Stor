@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// Rank charts invert the usual "up is better" intuition — position 3 beats position 40 —
 /// so the direction of every delta is asserted explicitly.

@@ -34,7 +34,7 @@ final class ScreenshotImageStore {
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)
                 .first ?? URL.temporaryDirectory
             self.directory = base
-                .appendingPathComponent("Stor", isDirectory: true)
+                .appendingPathComponent("AscendKit", isDirectory: true)
                 .appendingPathComponent("ScreenshotImages", isDirectory: true)
         }
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)

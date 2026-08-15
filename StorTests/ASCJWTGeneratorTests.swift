@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// A malformed token fails every App Store Connect call with an opaque 401, so the
 /// structure and signature are verified here against a throwaway key.

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// Keyword tracking is per storefront, so dedup has to be per storefront too. Getting this
 /// wrong either blocks legitimate keywords or fills the table with duplicates.

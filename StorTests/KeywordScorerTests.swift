@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 struct KeywordScorerTests {
     private func apps(_ counts: [Int]) -> [SERPAppStrength] {

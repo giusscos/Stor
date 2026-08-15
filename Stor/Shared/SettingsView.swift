@@ -348,7 +348,7 @@ private struct SyncSettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Stor refreshes due apps about every 15 minutes while this window is open, and again when the Mac wakes. Nothing runs after you quit the app.")
+            Text("AscendKit refreshes due apps about every 15 minutes while this window is open, and again when the Mac wakes. Nothing runs after you quit the app.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

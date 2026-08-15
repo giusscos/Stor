@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// The Markdown round trip is how users bulk-edit listings outside the app, so the parser
 /// has to survive hand-written files: odd casing, extra blank lines, missing sections.

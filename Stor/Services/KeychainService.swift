@@ -52,7 +52,7 @@ struct ASCAccountStore: Codable {
 final class KeychainService {
     static let shared = KeychainService()
 
-    private let service = "com.giusscos.Stor.asc-credentials"
+    private let service = "com.giusscos.AscendKit.asc-credentials"
     private let account = "asc-api-key"
 
     // MARK: - Active credential (backwards-compatible)

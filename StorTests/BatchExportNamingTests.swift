@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// App Store Connect orders uploaded screenshots by filename, and template names come from
 /// user input, so naming has to stay sortable and filesystem-safe.

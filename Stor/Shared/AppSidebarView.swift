@@ -54,7 +54,7 @@ struct AppSidebarView: View {
                     .tag(app)
             }
         }
-        .navigationTitle("Stor")
+        .navigationTitle("AscendKit")
         .toolbar {
             ToolbarItem {
                 Button { showAddApp = true } label: {

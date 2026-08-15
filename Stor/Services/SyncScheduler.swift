@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import SwiftData
 
-/// Runs due per-app syncs while Stor is open. macOS does not give a reliable
+/// Runs due per-app syncs while AscendKit is open. macOS does not give a reliable
 /// background budget after quit, so this is a Timer-style loop plus wake-from-sleep.
 @MainActor
 final class SyncScheduler {

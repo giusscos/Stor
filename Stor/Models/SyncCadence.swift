@@ -18,8 +18,8 @@ enum SyncCadence: String, CaseIterable, Identifiable {
     var help: String {
         switch self {
         case .off: return "Only sync when you click Sync"
-        case .daily: return "Pull listing metadata, popularity, and ranks about once a day while Stor is open"
-        case .weekly: return "Pull listing metadata, popularity, and ranks about once a week while Stor is open"
+        case .daily: return "Pull listing metadata, popularity, and ranks about once a day while AscendKit is open"
+        case .weekly: return "Pull listing metadata, popularity, and ranks about once a week while AscendKit is open"
         }
     }
 

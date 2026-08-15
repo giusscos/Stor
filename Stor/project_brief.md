@@ -1,4 +1,4 @@
-# Stor — Project Brief
+# AscendKit — Project Brief
 
 ## What it is
 A **macOS-only** native app for indie/solo iOS developers to manage App Store Connect (ASC) metadata with **version history/diffing** (like git for your app listing), plus **ASO keyword research and ranking tracking**, similar to tryastro.app.

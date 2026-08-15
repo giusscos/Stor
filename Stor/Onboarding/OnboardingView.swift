@@ -33,7 +33,7 @@ struct OnboardingView: View {
                 .foregroundStyle(.blue)
 
             VStack(spacing: 12) {
-                Text("Welcome to Stor")
+                Text("Welcome to AscendKit")
                     .font(.largeTitle)
                     .fontWeight(.bold)
 

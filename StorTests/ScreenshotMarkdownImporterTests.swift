@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// Screenshot translations are matched to layers by UUID, so a parser that loses or
 /// mis-associates an id silently drops a translator's work.

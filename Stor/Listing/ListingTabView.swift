@@ -364,7 +364,7 @@ struct ListingTabView: View {
         let count = latest.pushableLocalizations.count
         let version = latest.versionString.map { " for version \($0)" } ?? ""
         var message = "This overwrites the live App Store Connect listing"
-            + "\(version) across \(count) locale\(count == 1 ? "" : "s"). This cannot be undone from Stor."
+            + "\(version) across \(count) locale\(count == 1 ? "" : "s"). This cannot be undone from AscendKit."
         let skipped = latest.unpushableLocales
         if !skipped.isEmpty {
             message += "\n\nNot pushed (never synced): \(skipped.joined(separator: ", "))."

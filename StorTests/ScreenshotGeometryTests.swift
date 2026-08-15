@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// The canvas and the PNG exporter compute these rects independently of each other's
 /// rendering code, so a drift here shows up as screenshots that look right in the editor

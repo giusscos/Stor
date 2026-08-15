@@ -1,5 +1,5 @@
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// Picking the wrong App Store version silently pushes metadata to a release Apple will
 /// reject, so ordering and editability get their own coverage.

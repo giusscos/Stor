@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 struct KeywordSuggestionEngineTests {
     private func financeContext(tracked: [KeywordSuggestionEngine.TrackedSeed]? = nil) -> KeywordSuggestionEngine.ListingContext {

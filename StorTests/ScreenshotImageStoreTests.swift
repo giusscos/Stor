@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import Stor
+@testable import AscendKit
 
 /// Layer images are content-addressed so that re-importing the same screenshot doesn't
 /// duplicate megabytes on disk, and so editing a layer rewrites only a digest.

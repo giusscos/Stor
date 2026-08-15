@@ -85,7 +85,7 @@ struct ASCScreenshotSetsView: View {
                 }
                 Button("Cancel", role: .cancel) { pendingDelete = nil }
             } message: {
-                Text("This removes it from the live screenshot set. It cannot be undone from Stor.")
+                Text("This removes it from the live screenshot set. It cannot be undone from AscendKit.")
             }
             .task {
                 loadLocalizations()
