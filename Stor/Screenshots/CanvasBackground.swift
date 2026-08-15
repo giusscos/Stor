@@ -429,8 +429,18 @@ struct ShapeLayerView: View {
                     .clipShape(shape)
             }
         case .glass:
-            Color.clear
-                .glassEffect(.regular.tint(glassTint(from: fill)), in: shape)
+            if #available(macOS 26, *) {
+                Color.clear
+                    .glassEffect(.regular.tint(glassTint(from: fill)), in: shape)
+            } else {
+                ZStack {
+                    Color.clear
+                        .background(.regularMaterial)
+                        .clipShape(shape)
+                    CanvasBackgroundFill(background: fill)
+                        .clipShape(shape)
+                }
+            }
         }
     }
 

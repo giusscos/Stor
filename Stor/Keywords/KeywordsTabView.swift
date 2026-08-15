@@ -278,9 +278,18 @@ struct KeywordsTabView: View {
                         .help("Fetch popularity scores from Apple Ads")
                     }
 
+                    #if DEBUG
                     Button(action: checkRankings) {
                         Label {
-                            Text("Check Rankings")
+                            HStack(spacing: 4) {
+                                Text("Check Rankings")
+                                Text("BETA")
+                                    .font(.system(size: 7, weight: .bold))
+                                    .foregroundStyle(.orange)
+                                    .padding(.horizontal, 3)
+                                    .padding(.vertical, 1)
+                                    .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 2))
+                            }
                         } icon: {
                             if isCheckingRankings {
                                 ProgressView()
@@ -292,7 +301,8 @@ struct KeywordsTabView: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(isCheckingRankings || filteredKeywords.isEmpty)
-                    .help("Check App Store search ranking positions via iTunes Search API")
+                    .help("Check App Store search ranking positions via iTunes Search API — experimental feature")
+                    #endif
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -310,7 +320,18 @@ struct KeywordsTabView: View {
                         .help("Difficulty 0–100 from SERP competition")
                     Text("Opp").frame(width: 40, alignment: .leading)
                         .help("Opportunity 0–100 from popularity, difficulty, and rank")
-                    Text("Rank").frame(width: 56, alignment: .leading)
+                    #if DEBUG
+                    HStack(spacing: 3) {
+                        Text("Rank")
+                        Text("BETA")
+                            .font(.system(size: 6, weight: .bold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 2))
+                    }
+                    .frame(width: 56, alignment: .leading)
+                    #endif
                     Text("Trend").frame(width: 80, alignment: .leading)
                     Color.clear.frame(width: 36)
                 }
@@ -639,6 +660,7 @@ private struct KeywordRow: View {
             ScoreBadge(value: keyword.opportunity)
                 .frame(width: 40, alignment: .leading)
 
+            #if DEBUG
             Group {
                 let latest = points.last
                 if isCheckingRankings && latest == nil {
@@ -664,6 +686,7 @@ private struct KeywordRow: View {
                         .frame(width: 56, alignment: .leading)
                 }
             }
+            #endif
 
             Button(action: onShowTrend) {
                 RankSparkline(points: points)
