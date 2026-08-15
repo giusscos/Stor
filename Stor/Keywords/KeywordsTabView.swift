@@ -278,7 +278,7 @@ struct KeywordsTabView: View {
                         .help("Fetch popularity scores from Apple Ads")
                     }
 
-                    #if DEBUG
+                    #if false // ranking feature hidden for next build
                     Button(action: checkRankings) {
                         Label {
                             HStack(spacing: 4) {
@@ -320,7 +320,7 @@ struct KeywordsTabView: View {
                         .help("Difficulty 0–100 from SERP competition")
                     Text("Opp").frame(width: 40, alignment: .leading)
                         .help("Opportunity 0–100 from popularity, difficulty, and rank")
-                    #if DEBUG
+                    #if false // ranking feature hidden for next build
                     HStack(spacing: 3) {
                         Text("Rank")
                         Text("BETA")
@@ -660,7 +660,7 @@ private struct KeywordRow: View {
             ScoreBadge(value: keyword.opportunity)
                 .frame(width: 40, alignment: .leading)
 
-            #if DEBUG
+            #if false // ranking feature hidden for next build
             Group {
                 let latest = points.last
                 if isCheckingRankings && latest == nil {

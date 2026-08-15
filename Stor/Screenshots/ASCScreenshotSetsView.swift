@@ -37,12 +37,14 @@ struct ASCScreenshotSetsView: View {
                         systemImage: "arrow.clockwise",
                         description: Text("Screenshot sets are attached to a version localization.")
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else if screenshots.isEmpty {
                     ContentUnavailableView(
                         "No screenshots in this set",
                         systemImage: "photo.on.rectangle.angled",
                         description: Text("Upload from the editor, or pick another device / locale.")
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
                     screenshotList
                 }

@@ -191,6 +191,15 @@ struct ASCScreenshot: Codable, Identifiable {
 
 // MARK: - Error
 
+/// App Store Connect's JSON:API error envelope, e.g. `{"errors":[{"title":...,"detail":...}]}`.
+private struct ASCErrorEnvelope: Decodable {
+    struct APIError: Decodable {
+        let title: String?
+        let detail: String?
+    }
+    let errors: [APIError]?
+}
+
 enum ASCAPIError: LocalizedError {
     case noVersionsFound
     case versionNotFound(String)
@@ -203,7 +212,13 @@ enum ASCAPIError: LocalizedError {
         switch self {
         case .noVersionsFound: return "No app versions found for this app."
         case .versionNotFound(let id): return "Version \(id) is no longer available in App Store Connect."
-        case .httpError(let code, let body): return "HTTP \(code): \(body.prefix(200))"
+        case .httpError(let code, let body):
+            if let data = body.data(using: .utf8),
+               let envelope = try? JSONDecoder().decode(ASCErrorEnvelope.self, from: data),
+               let detail = envelope.errors?.first?.detail {
+                return "HTTP \(code): \(detail)"
+            }
+            return "HTTP \(code): \(body.prefix(300))"
         case .rateLimited: return "App Store Connect is rate limiting requests. Try again in a few minutes."
         case .decodingError(let e): return "Response decode error: \(e.localizedDescription)"
         case .incompleteUpload: return "The screenshot upload was incomplete and was not committed."

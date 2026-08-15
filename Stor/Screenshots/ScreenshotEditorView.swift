@@ -112,12 +112,14 @@ struct ScreenshotEditorView: View {
                 }
             }
 
+#if DEBUG
             ToolbarItem {
                 Button { showASCSets = true } label: {
                     Label("ASC Screenshots", systemImage: "photo.on.rectangle.angled")
                 }
                 .help("Preview, reorder, and delete screenshots already on App Store Connect")
             }
+#endif
 
             ToolbarItem {
                 Button { showNewTemplate = true } label: {
