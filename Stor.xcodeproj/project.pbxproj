@@ -17,7 +17,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		3BDB6C13302768DF00D5617A /* Stor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stor.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3BDB6C13302768DF00D5617A /* AscendKit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AscendKit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3BDB6C30302768DF00D5617A /* StorTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StorTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -60,7 +60,7 @@
 		3BDB6C14302768DF00D5617A /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				3BDB6C13302768DF00D5617A /* Stor.app */,
+				3BDB6C13302768DF00D5617A /* AscendKit.app */,
 				3BDB6C30302768DF00D5617A /* StorTests.xctest */,
 			);
 			name = Products;
@@ -92,7 +92,7 @@
 			);
 			name = Stor;
 			productName = Stor;
-			productReference = 3BDB6C13302768DF00D5617A /* Stor.app */;
+			productReference = 3BDB6C13302768DF00D5617A /* AscendKit.app */;
 			productType = "com.apple.product-type.application";
 		};
 		3BDB6C35302768DF00D5617A /* StorTests */ = {
@@ -335,18 +335,18 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Stor;
+				INFOPLIST_KEY_CFBundleDisplayName = AscendKit;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Giuseppe Cosenza. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = giusscos;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.giusscos.Stor;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.giusscos.AscendKit;
+				PRODUCT_NAME = AscendKit;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -382,18 +382,18 @@
 				ENABLE_RESOURCE_ACCESS_USB = NO;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Stor;
+				INFOPLIST_KEY_CFBundleDisplayName = AscendKit;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "Copyright © 2026 Giuseppe Cosenza. All rights reserved.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = giusscos;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.giusscos.Stor;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.giusscos.AscendKit;
+				PRODUCT_NAME = AscendKit;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;

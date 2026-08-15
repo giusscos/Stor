@@ -6,15 +6,10 @@
     {
       "layers" : [
         {
-          "image-name" : "UFO.png",
-          "name" : "UFO",
-          "position" : {
-            "scale" : 1,
-            "translation-in-points" : [
-              -3,
-              63.5
-            ]
-          }
+          "fill" : "automatic",
+          "glass" : false,
+          "image-name" : "Stor-storefront-building.png",
+          "name" : "Stor-storefront-building"
         }
       ],
       "shadow" : {

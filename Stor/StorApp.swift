@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 @main
-struct StorApp: App {
+struct AscendKitApp: App {
     private let container: ModelContainer
 
     init() {
